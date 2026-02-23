@@ -103,3 +103,49 @@ def test_high_risk_diff_touched_safe_diff() -> None:
 def test_high_risk_diff_touched_case_insensitive() -> None:
     diff = "diff --git a/src/Auth/Login.py b/src/Auth/Login.py\n+pass"
     assert high_risk_diff_touched(diff) is True
+
+
+def test_no_escalation_when_disabled() -> None:
+    """Gate disabled — even with all triggers active, never escalates."""
+    decision = should_escalate_debug(
+        enabled=False,
+        confidence=0.2,
+        confidence_threshold=0.7,
+        parse_failed=True,
+        retry_count=3,
+        max_subskill_attempts=1,
+        risk="high",
+        high_risk_files_touched=True,
+    )
+    assert decision.escalate is False
+    assert decision.reasons == ["disabled"]
+
+
+def test_escalation_on_high_risk_level() -> None:
+    decision = should_escalate_debug(
+        enabled=True,
+        confidence=0.9,
+        confidence_threshold=0.7,
+        parse_failed=False,
+        retry_count=0,
+        max_subskill_attempts=3,
+        risk="high",
+        high_risk_files_touched=False,
+    )
+    assert decision.escalate is True
+    assert "risk_high" in decision.reasons
+
+
+def test_escalation_on_retries_exhausted() -> None:
+    decision = should_escalate_debug(
+        enabled=True,
+        confidence=0.9,
+        confidence_threshold=0.7,
+        parse_failed=False,
+        retry_count=3,
+        max_subskill_attempts=3,
+        risk="low",
+        high_risk_files_touched=False,
+    )
+    assert decision.escalate is True
+    assert "subskill_retries_exhausted" in decision.reasons
