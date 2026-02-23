@@ -85,7 +85,7 @@ class ReviewPhase:
             worktrees=worktrees,
             agents=agents,
             prs=prs,
-            bus=self._bus,
+            event_bus=self._bus,
             state=state,
             summarizer=transcript_summarizer,
         )
@@ -93,7 +93,7 @@ class ReviewPhase:
             config=config,
             state=state,
             prs=prs,
-            bus=self._bus,
+            event_bus=self._bus,
             ac_generator=ac_generator,
             retrospective=retrospective,
             verification_judge=verification_judge,
