@@ -29,7 +29,7 @@ class TestPrepResultSummary:
         result = PrepResult(created=[], existed=["a", "b"], failed=[])
         assert result.summary() == "Created 0 labels, 2 already existed"
 
-    def test_mixed(self) -> None:
+    def test_summary_reports_created_and_existed_counts(self) -> None:
         result = PrepResult(
             created=["a", "b", "c", "d", "e"],
             existed=["f", "g"],
@@ -45,7 +45,7 @@ class TestPrepResultSummary:
         )
         assert result.summary() == "Created 1 label, 1 already existed, 2 failed"
 
-    def test_empty(self) -> None:
+    def test_summary_reports_zero_when_no_labels(self) -> None:
         result = PrepResult()
         assert result.summary() == "Created 0 labels, 0 already existed"
 
@@ -70,7 +70,7 @@ class TestListExistingLabels:
         assert result == {"bug", "hydraflow-plan"}
 
     @pytest.mark.asyncio
-    async def test_empty_repo(self) -> None:
+    async def test_empty_repo_returns_empty_label_set(self) -> None:
         config = ConfigFactory.create()
         mock = SubprocessMockBuilder().with_stdout("[]").build()
 
@@ -130,7 +130,7 @@ class TestEnsureLabels:
         assert len(result.failed) == 0
 
     @pytest.mark.asyncio
-    async def test_reports_existing(self) -> None:
+    async def test_reports_already_existing_labels_in_existed_list(self) -> None:
         """Labels already in the repo are classified as 'existed'."""
         config = ConfigFactory.create()
         # Use actual label names from config (ConfigFactory uses "test-label"
@@ -676,7 +676,7 @@ class TestCheckLinting:
         assert check.status == AuditCheckStatus.PRESENT
         assert "ruff" in check.detail
 
-    def test_eslintrc(self, tmp_path: Path) -> None:
+    def test_check_linting_detects_eslintrc_file(self, tmp_path: Path) -> None:
         """Should detect .eslintrc.json."""
         (tmp_path / ".eslintrc.json").write_text("{}\n")
         config = ConfigFactory.create(repo_root=tmp_path)
@@ -1003,7 +1003,7 @@ class TestCheckLabels:
         assert check.status == AuditCheckStatus.PRESENT
 
     @pytest.mark.asyncio
-    async def test_partial_labels(self, tmp_path: Path) -> None:
+    async def test_partial_labels_returns_partial_status(self, tmp_path: Path) -> None:
         """Should report PARTIAL when some labels are missing."""
         config = ConfigFactory.create(repo_root=tmp_path)
         from prep import RepoAuditor
@@ -1019,7 +1019,7 @@ class TestCheckLabels:
         assert check.status == AuditCheckStatus.PARTIAL
 
     @pytest.mark.asyncio
-    async def test_no_labels(self, tmp_path: Path) -> None:
+    async def test_no_labels_returns_missing_status(self, tmp_path: Path) -> None:
         """Should report MISSING when no HydraFlow labels exist."""
         config = ConfigFactory.create(repo_root=tmp_path)
         from prep import RepoAuditor
