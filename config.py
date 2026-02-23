@@ -18,6 +18,11 @@ logger = logging.getLogger("hydraflow.config")
 # Each tuple: (field_name, env_var_key, default_value)
 _ENV_INT_OVERRIDES: list[tuple[str, str, int]] = [
     ("min_plan_words", "HYDRAFLOW_MIN_PLAN_WORDS", 200),
+    (
+        "max_pre_quality_review_attempts",
+        "HYDRAFLOW_MAX_PRE_QUALITY_REVIEW_ATTEMPTS",
+        1,
+    ),
     ("max_review_fix_attempts", "HYDRAFLOW_MAX_REVIEW_FIX_ATTEMPTS", 2),
     ("min_review_findings", "HYDRAFLOW_MIN_REVIEW_FINDINGS", 3),
     ("max_issue_body_chars", "HYDRAFLOW_MAX_ISSUE_BODY_CHARS", 10_000),
@@ -34,6 +39,8 @@ _ENV_INT_OVERRIDES: list[tuple[str, str, int]] = [
     ("max_transcript_summary_chars", "HYDRAFLOW_MAX_TRANSCRIPT_SUMMARY_CHARS", 50_000),
     ("pr_unstick_interval", "HYDRAFLOW_PR_UNSTICK_INTERVAL", 3600),
     ("pr_unstick_batch_size", "HYDRAFLOW_PR_UNSTICK_BATCH_SIZE", 10),
+    ("max_subskill_attempts", "HYDRAFLOW_MAX_SUBSKILL_ATTEMPTS", 0),
+    ("max_debug_attempts", "HYDRAFLOW_MAX_DEBUG_ATTEMPTS", 1),
 ]
 
 _ENV_STR_OVERRIDES: list[tuple[str, str, str]] = [
@@ -41,6 +48,8 @@ _ENV_STR_OVERRIDES: list[tuple[str, str, str]] = [
     ("docker_image", "HYDRAFLOW_DOCKER_IMAGE", "ghcr.io/t-rav/hydraflow-agent:latest"),
     ("transcript_summary_model", "HYDRAFLOW_TRANSCRIPT_SUMMARY_MODEL", "haiku"),
     ("triage_model", "HYDRAFLOW_TRIAGE_MODEL", "haiku"),
+    ("subskill_model", "HYDRAFLOW_SUBSKILL_MODEL", "haiku"),
+    ("debug_model", "HYDRAFLOW_DEBUG_MODEL", "opus"),
 ]
 
 _ENV_FLOAT_OVERRIDES: list[tuple[str, str, float]] = [
@@ -62,6 +71,7 @@ _ENV_BOOL_OVERRIDES: list[tuple[str, str, bool]] = [
         False,
     ),
     ("memory_auto_approve", "HYDRAFLOW_MEMORY_AUTO_APPROVE", False),
+    ("debug_escalation_enabled", "HYDRAFLOW_DEBUG_ESCALATION_ENABLED", True),
 ]
 
 # Label env var overrides — maps env key → (field_name, default_value)
@@ -109,10 +119,18 @@ class HydraFlowConfig(BaseModel):
     max_budget_usd: float = Field(
         default=0, ge=0, description="USD cap per implementation agent (0 = unlimited)"
     )
+    implementation_tool: Literal["claude", "codex"] = Field(
+        default="claude",
+        description="CLI backend for implementation agents",
+    )
     model: str = Field(default="opus", description="Model for implementation agents")
 
     # Review configuration
-    review_model: str = Field(default="opus", description="Model for review agents")
+    review_tool: Literal["claude", "codex"] = Field(
+        default="claude",
+        description="CLI backend for review agents",
+    )
+    review_model: str = Field(default="sonnet", description="Model for review agents")
     review_budget_usd: float = Field(
         default=0, ge=0, description="USD cap per review agent (0 = unlimited)"
     )
@@ -135,6 +153,12 @@ class HydraFlowConfig(BaseModel):
         ge=0,
         le=5,
         description="Max quality fix-and-retry cycles before marking agent as failed",
+    )
+    max_pre_quality_review_attempts: int = Field(
+        default=1,
+        ge=0,
+        le=5,
+        description="Max pre-quality review/correction passes before quality verification",
     )
     max_review_fix_attempts: int = Field(
         default=2,
@@ -214,7 +238,15 @@ class HydraFlowConfig(BaseModel):
         default=["hydraflow-plan"],
         description="Labels for issues needing plans (OR logic)",
     )
+    planner_tool: Literal["claude", "codex"] = Field(
+        default="claude",
+        description="CLI backend for planning agents",
+    )
     planner_model: str = Field(default="opus", description="Model for planning agents")
+    triage_tool: Literal["claude", "codex"] = Field(
+        default="claude",
+        description="CLI backend for triage agents",
+    )
     triage_model: str = Field(
         default="haiku", description="Model for triage evaluation (fast/cheap)"
     )
@@ -272,6 +304,44 @@ class HydraFlowConfig(BaseModel):
     )
 
     # Agent prompt configuration
+    subskill_tool: Literal["claude", "codex"] = Field(
+        default="claude",
+        description="CLI backend for low-tier subskill/tool-chain passes",
+    )
+    subskill_model: str = Field(
+        default="haiku",
+        description="Model used for low-tier subskill/tool-chain passes",
+    )
+    max_subskill_attempts: int = Field(
+        default=0,
+        ge=0,
+        le=5,
+        description="Max low-tier subskill precheck attempts per stage",
+    )
+    debug_escalation_enabled: bool = Field(
+        default=True,
+        description="Enable automatic escalation to debug model when low-tier prechecks signal risk/ambiguity",
+    )
+    debug_tool: Literal["claude", "codex"] = Field(
+        default="claude",
+        description="CLI backend for debug escalation passes",
+    )
+    debug_model: str = Field(
+        default="opus",
+        description="Model used for debug escalation passes",
+    )
+    max_debug_attempts: int = Field(
+        default=1,
+        ge=0,
+        le=3,
+        description="Max debug escalation attempts per stage",
+    )
+    subskill_confidence_threshold: float = Field(
+        default=0.7,
+        ge=0.0,
+        le=1.0,
+        description="Minimum low-tier confidence before skipping debug escalation",
+    )
     test_command: str = Field(
         default="make test",
         description="Quick test command for agent prompts",
@@ -443,8 +513,16 @@ class HydraFlowConfig(BaseModel):
         default="sonnet",
         description="Model for acceptance criteria generation (post-merge)",
     )
+    ac_tool: Literal["claude", "codex"] = Field(
+        default="claude",
+        description="CLI backend for acceptance criteria generation",
+    )
     ac_budget_usd: float = Field(
         default=0, ge=0, description="USD cap for AC generation agent (0 = unlimited)"
+    )
+    verification_judge_tool: Literal["claude", "codex"] = Field(
+        default="claude",
+        description="CLI backend for verification judge agents",
     )
 
     # UI directories (fallback for worktree node_modules symlinking)
@@ -702,6 +780,46 @@ def _apply_env_overrides(config: HydraFlowConfig) -> None:
         env_net = os.environ.get("HYDRAFLOW_DOCKER_NETWORK_MODE")
         if env_net in ("bridge", "none", "host"):
             object.__setattr__(config, "docker_network_mode", env_net)
+
+    if config.implementation_tool == "claude":
+        env_impl_tool = os.environ.get("HYDRAFLOW_IMPLEMENTATION_TOOL")
+        if env_impl_tool in ("claude", "codex"):
+            object.__setattr__(config, "implementation_tool", env_impl_tool)
+
+    if config.review_tool == "claude":
+        env_review_tool = os.environ.get("HYDRAFLOW_REVIEW_TOOL")
+        if env_review_tool in ("claude", "codex"):
+            object.__setattr__(config, "review_tool", env_review_tool)
+
+    if config.planner_tool == "claude":
+        env_planner_tool = os.environ.get("HYDRAFLOW_PLANNER_TOOL")
+        if env_planner_tool in ("claude", "codex"):
+            object.__setattr__(config, "planner_tool", env_planner_tool)
+
+    if config.triage_tool == "claude":
+        env_triage_tool = os.environ.get("HYDRAFLOW_TRIAGE_TOOL")
+        if env_triage_tool in ("claude", "codex"):
+            object.__setattr__(config, "triage_tool", env_triage_tool)
+
+    if config.ac_tool == "claude":
+        env_ac_tool = os.environ.get("HYDRAFLOW_AC_TOOL")
+        if env_ac_tool in ("claude", "codex"):
+            object.__setattr__(config, "ac_tool", env_ac_tool)
+
+    if config.verification_judge_tool == "claude":
+        env_judge_tool = os.environ.get("HYDRAFLOW_VERIFICATION_JUDGE_TOOL")
+        if env_judge_tool in ("claude", "codex"):
+            object.__setattr__(config, "verification_judge_tool", env_judge_tool)
+
+    if config.subskill_tool == "claude":
+        env_subskill_tool = os.environ.get("HYDRAFLOW_SUBSKILL_TOOL")
+        if env_subskill_tool in ("claude", "codex"):
+            object.__setattr__(config, "subskill_tool", env_subskill_tool)
+
+    if config.debug_tool == "claude":
+        env_debug_tool = os.environ.get("HYDRAFLOW_DEBUG_TOOL")
+        if env_debug_tool in ("claude", "codex"):
+            object.__setattr__(config, "debug_tool", env_debug_tool)
 
     # Lite plan labels (comma-separated list, special-case)
     env_lite_labels = os.environ.get("HYDRAFLOW_LITE_PLAN_LABELS")

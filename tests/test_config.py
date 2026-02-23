@@ -384,7 +384,7 @@ class TestHydraFlowConfigDefaults:
             worktree_base=tmp_path / "wt",
             state_file=tmp_path / "s.json",
         )
-        assert cfg.review_model == "opus"
+        assert cfg.review_model == "sonnet"
 
     def test_review_budget_usd_default(self, tmp_path: Path) -> None:
         cfg = HydraFlowConfig(
@@ -1100,6 +1100,36 @@ class TestHydraFlowConfigValidationConstraints:
                 state_file=tmp_path / "s.json",
             )
 
+    # max_pre_quality_review_attempts: ge=0, le=5
+
+    def test_max_pre_quality_review_attempts_default(self, tmp_path: Path) -> None:
+        cfg = HydraFlowConfig(
+            repo_root=tmp_path,
+            worktree_base=tmp_path / "wt",
+            state_file=tmp_path / "s.json",
+        )
+        assert cfg.max_pre_quality_review_attempts == 1
+
+    def test_max_pre_quality_review_attempts_configurable(self, tmp_path: Path) -> None:
+        cfg = HydraFlowConfig(
+            max_pre_quality_review_attempts=3,
+            repo_root=tmp_path,
+            worktree_base=tmp_path / "wt",
+            state_file=tmp_path / "s.json",
+        )
+        assert cfg.max_pre_quality_review_attempts == 3
+
+    def test_max_pre_quality_review_attempts_above_maximum_raises(
+        self, tmp_path: Path
+    ) -> None:
+        with pytest.raises(ValueError):
+            HydraFlowConfig(
+                max_pre_quality_review_attempts=6,
+                repo_root=tmp_path,
+                worktree_base=tmp_path / "wt",
+                state_file=tmp_path / "s.json",
+            )
+
     # min_review_findings: ge=0, le=20
 
     def test_min_review_findings_default(self, tmp_path: Path) -> None:
@@ -1567,6 +1597,33 @@ class TestHydraFlowConfigMaxReviewFixAttempts:
             state_file=tmp_path / "s.json",
         )
         assert cfg.max_review_fix_attempts == 1
+
+
+class TestHydraFlowConfigMaxPreQualityReviewAttempts:
+    """Tests for max_pre_quality_review_attempts env var override."""
+
+    def test_max_pre_quality_review_attempts_env_var_override(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("HYDRAFLOW_MAX_PRE_QUALITY_REVIEW_ATTEMPTS", "3")
+        cfg = HydraFlowConfig(
+            repo_root=tmp_path,
+            worktree_base=tmp_path / "wt",
+            state_file=tmp_path / "s.json",
+        )
+        assert cfg.max_pre_quality_review_attempts == 3
+
+    def test_max_pre_quality_review_attempts_explicit_overrides_env_var(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("HYDRAFLOW_MAX_PRE_QUALITY_REVIEW_ATTEMPTS", "3")
+        cfg = HydraFlowConfig(
+            max_pre_quality_review_attempts=2,
+            repo_root=tmp_path,
+            worktree_base=tmp_path / "wt",
+            state_file=tmp_path / "s.json",
+        )
+        assert cfg.max_pre_quality_review_attempts == 2
 
 
 # ---------------------------------------------------------------------------
@@ -3546,3 +3603,56 @@ class TestDockerConfig:
                 state_file=tmp_path / "s.json",
                 docker_spawn_delay=31.0,
             )
+
+
+class TestAgentToolFields:
+    def test_tool_defaults(self, tmp_path: Path) -> None:
+        cfg = HydraFlowConfig(
+            repo_root=tmp_path,
+            worktree_base=tmp_path / "wt",
+            state_file=tmp_path / "s.json",
+        )
+        assert cfg.implementation_tool == "claude"
+        assert cfg.review_tool == "claude"
+        assert cfg.planner_tool == "claude"
+        assert cfg.triage_tool == "claude"
+        assert cfg.ac_tool == "claude"
+        assert cfg.verification_judge_tool == "claude"
+
+    def test_tool_env_overrides(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("HYDRAFLOW_IMPLEMENTATION_TOOL", "codex")
+        monkeypatch.setenv("HYDRAFLOW_REVIEW_TOOL", "codex")
+        monkeypatch.setenv("HYDRAFLOW_PLANNER_TOOL", "codex")
+        monkeypatch.setenv("HYDRAFLOW_TRIAGE_TOOL", "codex")
+        monkeypatch.setenv("HYDRAFLOW_AC_TOOL", "codex")
+        monkeypatch.setenv("HYDRAFLOW_VERIFICATION_JUDGE_TOOL", "codex")
+        cfg = HydraFlowConfig(
+            repo_root=tmp_path,
+            worktree_base=tmp_path / "wt",
+            state_file=tmp_path / "s.json",
+        )
+        assert cfg.implementation_tool == "codex"
+        assert cfg.review_tool == "codex"
+        assert cfg.planner_tool == "codex"
+        assert cfg.triage_tool == "codex"
+        assert cfg.ac_tool == "codex"
+        assert cfg.verification_judge_tool == "codex"
+
+
+class TestTieringFields:
+    def test_defaults(self, tmp_path: Path) -> None:
+        cfg = HydraFlowConfig(
+            repo_root=tmp_path,
+            worktree_base=tmp_path / "wt",
+            state_file=tmp_path / "s.json",
+        )
+        assert cfg.subskill_tool == "claude"
+        assert cfg.subskill_model == "haiku"
+        assert cfg.max_subskill_attempts == 0
+        assert cfg.debug_escalation_enabled is True
+        assert cfg.debug_tool == "claude"
+        assert cfg.debug_model == "opus"
+        assert cfg.max_debug_attempts == 1
+        assert cfg.subskill_confidence_threshold == pytest.approx(0.7)

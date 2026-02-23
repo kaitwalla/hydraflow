@@ -120,6 +120,23 @@ class TestBuildCommand:
         cmd = runner._build_command(tmp_path)
         assert "--verbose" in cmd
 
+    def test_build_command_supports_codex_backend(
+        self, event_bus: EventBus, tmp_path: Path
+    ) -> None:
+        """Codex backend should build a non-interactive codex exec command."""
+        cfg = ConfigFactory.create(
+            implementation_tool="codex",
+            model="gpt-5-codex",
+            repo_root=tmp_path / "repo",
+            worktree_base=tmp_path / "wt",
+            state_file=tmp_path / "s.json",
+        )
+        runner = AgentRunner(cfg, event_bus)
+        cmd = runner._build_command(tmp_path)
+        assert cmd[:3] == ["codex", "exec", "--json"]
+        assert "--model" in cmd
+        assert cmd[cmd.index("--model") + 1] == "gpt-5-codex"
+
 
 # ---------------------------------------------------------------------------
 # AgentRunner._build_prompt
@@ -498,6 +515,54 @@ class TestRunFailure:
 
         assert result.success is False
         fix_mock.assert_not_awaited()
+
+
+class TestPreQualityReviewLoop:
+    """Tests for AgentRunner pre-quality review/correction loop."""
+
+    @pytest.mark.asyncio
+    async def test_skips_when_no_commits(
+        self, config, event_bus: EventBus, issue, tmp_path: Path
+    ) -> None:
+        runner = AgentRunner(config, event_bus)
+        with patch.object(
+            runner, "_count_commits", new_callable=AsyncMock, return_value=0
+        ):
+            ok, msg, attempts = await runner._run_pre_quality_review_loop(
+                issue, tmp_path, "agent/issue-42", worker_id=1
+            )
+        assert ok is True
+        assert attempts == 0
+        assert "Skipped" in msg
+
+    @pytest.mark.asyncio
+    async def test_retries_bounded_by_config(
+        self, event_bus: EventBus, issue, tmp_path: Path
+    ) -> None:
+        cfg = ConfigFactory.create(
+            max_pre_quality_review_attempts=2,
+            repo_root=tmp_path / "repo",
+            worktree_base=tmp_path / "wt",
+            state_file=tmp_path / "s.json",
+        )
+        runner = AgentRunner(cfg, event_bus)
+        with (
+            patch.object(
+                runner, "_count_commits", new_callable=AsyncMock, return_value=1
+            ),
+            patch.object(
+                runner,
+                "_execute",
+                new_callable=AsyncMock,
+                return_value="PRE_QUALITY_REVIEW_RESULT: RETRY\nRUN_TOOL_RESULT: RETRY",
+            ) as execute_mock,
+        ):
+            ok, _msg, attempts = await runner._run_pre_quality_review_loop(
+                issue, tmp_path, "agent/issue-42", worker_id=1
+            )
+        assert ok is False
+        assert attempts == 2
+        assert execute_mock.await_count == 4
 
     @pytest.mark.asyncio
     async def test_run_success_when_fix_loop_succeeds(

@@ -68,9 +68,21 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Model for implementation agents (default: opus)",
     )
     parser.add_argument(
+        "--implementation-tool",
+        default=None,
+        choices=["claude", "codex"],
+        help="CLI backend for implementation agents (default: claude)",
+    )
+    parser.add_argument(
         "--review-model",
         default=None,
-        help="Model for review agents (default: opus)",
+        help="Model for review agents (default: sonnet)",
+    )
+    parser.add_argument(
+        "--review-tool",
+        default=None,
+        choices=["claude", "codex"],
+        help="CLI backend for review agents (default: claude)",
     )
     parser.add_argument(
         "--review-budget-usd",
@@ -95,6 +107,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         type=int,
         default=None,
         help="Max CI fix-and-retry cycles; 0 disables CI wait (default: 2)",
+    )
+    parser.add_argument(
+        "--max-pre-quality-review-attempts",
+        type=int,
+        default=None,
+        help="Max pre-quality review/correction passes before make quality (default: 1)",
     )
     parser.add_argument(
         "--max-review-fix-attempts",
@@ -188,6 +206,18 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Model for planning agents (default: opus)",
     )
     parser.add_argument(
+        "--planner-tool",
+        default=None,
+        choices=["claude", "codex"],
+        help="CLI backend for planning agents (default: claude)",
+    )
+    parser.add_argument(
+        "--triage-tool",
+        default=None,
+        choices=["claude", "codex"],
+        help="CLI backend for triage agents (default: claude)",
+    )
+    parser.add_argument(
         "--planner-budget-usd",
         type=float,
         default=None,
@@ -218,6 +248,18 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--main-branch",
         default=None,
         help="Base branch name (default: main)",
+    )
+    parser.add_argument(
+        "--ac-tool",
+        default=None,
+        choices=["claude", "codex"],
+        help="CLI backend for acceptance criteria generation (default: claude)",
+    )
+    parser.add_argument(
+        "--verification-judge-tool",
+        default=None,
+        choices=["claude", "codex"],
+        help="CLI backend for verification judge (default: claude)",
     )
     parser.add_argument(
         "--dashboard-port",
@@ -393,21 +435,28 @@ def build_config(args: argparse.Namespace) -> HydraFlowConfig:
         "max_hitl_workers",
         "max_budget_usd",
         "model",
+        "implementation_tool",
         "review_model",
+        "review_tool",
         "review_budget_usd",
         "ci_check_timeout",
         "ci_poll_interval",
         "max_ci_fix_attempts",
+        "max_pre_quality_review_attempts",
         "max_review_fix_attempts",
         "min_review_findings",
         "max_merge_conflict_fix_attempts",
         "max_issue_attempts",
+        "triage_tool",
         "planner_model",
+        "planner_tool",
         "planner_budget_usd",
         "min_plan_words",
         "test_command",
         "repo",
         "main_branch",
+        "ac_tool",
+        "verification_judge_tool",
         "dashboard_port",
         "gh_token",
         "git_user_name",
