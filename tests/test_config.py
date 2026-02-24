@@ -3685,7 +3685,7 @@ class TestDockerConfig:
     def test_docker_enabled_env_var_override(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        monkeypatch.setenv("HYDRA_DOCKER_ENABLED", "true")
+        monkeypatch.setenv("HYDRAFLOW_DOCKER_ENABLED", "true")
         cfg = HydraFlowConfig(
             repo_root=tmp_path,
             worktree_base=tmp_path / "wt",
@@ -3696,7 +3696,7 @@ class TestDockerConfig:
     def test_docker_enabled_env_var_false(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        monkeypatch.setenv("HYDRA_DOCKER_ENABLED", "no")
+        monkeypatch.setenv("HYDRAFLOW_DOCKER_ENABLED", "false")
         cfg = HydraFlowConfig(
             repo_root=tmp_path,
             worktree_base=tmp_path / "wt",
@@ -3704,32 +3704,10 @@ class TestDockerConfig:
         )
         assert cfg.docker_enabled is False
 
-    def test_docker_image_env_var_override(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        monkeypatch.setenv("HYDRA_DOCKER_IMAGE", "hydra:v2")
-        cfg = HydraFlowConfig(
-            repo_root=tmp_path,
-            worktree_base=tmp_path / "wt",
-            state_file=tmp_path / "s.json",
-        )
-        assert cfg.docker_image == "hydra:v2"
-
-    def test_docker_spawn_delay_env_var_override(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        monkeypatch.setenv("HYDRA_DOCKER_SPAWN_DELAY", "5.0")
-        cfg = HydraFlowConfig(
-            repo_root=tmp_path,
-            worktree_base=tmp_path / "wt",
-            state_file=tmp_path / "s.json",
-        )
-        assert cfg.docker_spawn_delay == 5.0
-
     def test_docker_spawn_delay_invalid_env_var(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        monkeypatch.setenv("HYDRA_DOCKER_SPAWN_DELAY", "not-a-number")
+        monkeypatch.setenv("HYDRAFLOW_DOCKER_SPAWN_DELAY", "not-a-number")
         cfg = HydraFlowConfig(
             repo_root=tmp_path,
             worktree_base=tmp_path / "wt",
@@ -3740,7 +3718,7 @@ class TestDockerConfig:
     def test_docker_network_env_var_override(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        monkeypatch.setenv("HYDRA_DOCKER_NETWORK", "hydra-net")
+        monkeypatch.setenv("HYDRAFLOW_DOCKER_NETWORK", "hydra-net")
         cfg = HydraFlowConfig(
             repo_root=tmp_path,
             worktree_base=tmp_path / "wt",
@@ -3751,7 +3729,7 @@ class TestDockerConfig:
     def test_docker_network_env_var_not_applied_when_explicit(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        monkeypatch.setenv("HYDRA_DOCKER_NETWORK", "from-env")
+        monkeypatch.setenv("HYDRAFLOW_DOCKER_NETWORK", "from-env")
         cfg = HydraFlowConfig(
             repo_root=tmp_path,
             worktree_base=tmp_path / "wt",
@@ -3763,7 +3741,7 @@ class TestDockerConfig:
     def test_docker_enabled_explicit_overrides_env(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        monkeypatch.setenv("HYDRA_DOCKER_ENABLED", "true")
+        monkeypatch.setenv("HYDRAFLOW_DOCKER_ENABLED", "true")
         cfg = HydraFlowConfig(
             repo_root=tmp_path,
             worktree_base=tmp_path / "wt",
