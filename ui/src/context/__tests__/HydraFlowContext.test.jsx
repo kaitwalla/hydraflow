@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { render, screen } from '@testing-library/react'
 import { reducer } from '../HydraFlowContext'
 
@@ -42,9 +42,38 @@ const initialState = {
   sessions: [],
   currentSessionId: null,
   selectedSessionId: null,
+  supervisedRepos: [],
 }
 
+const originalFetch = global.fetch
+
+beforeEach(() => {
+  vi.spyOn(global, 'fetch').mockImplementation((input) => {
+    if (typeof input === 'string' && input.includes('/api/repos')) {
+      return Promise.resolve({
+        ok: true,
+        json: async () => ({ repos: [] }),
+      })
+    }
+    return Promise.resolve({
+      ok: true,
+      json: async () => ({}),
+    })
+  })
+})
+
+afterEach(() => {
+  vi.restoreAllMocks()
+  global.fetch = originalFetch
+})
+
 describe('HydraFlowContext reducer', () => {
+  it('SET_REPOS replaces supervised repo list', () => {
+    const repos = [{ slug: 'demo', path: '/tmp/demo' }]
+    const next = reducer(initialState, { type: 'SET_REPOS', data: { repos } })
+    expect(next.supervisedRepos).toEqual(repos)
+  })
+
   it('GITHUB_METRICS action sets githubMetrics state', () => {
     const data = {
       open_by_label: { 'hydraflow-plan': 3, 'hydraflow-ready': 1 },

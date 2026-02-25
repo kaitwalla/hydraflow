@@ -1589,6 +1589,8 @@ async def _run_scaffold(config: HydraFlowConfig) -> bool:
 
     run_log_lines.extend(_seed_context_assets(config))
 
+    run_log_lines.extend(_seed_context_assets(config))
+
     if config.dry_run:
         print("Hardening pass: skipped in dry-run mode")  # noqa: T201
         run_log_lines.append("- Hardening skipped in dry-run mode")

@@ -16,6 +16,9 @@ function defaultContext(overrides = {}) {
     selectedSessionId: null,
     selectSession: vi.fn(),
     deleteSession: vi.fn(),
+    addRepoShortcut: vi.fn(),
+    removeRepoShortcut: vi.fn(),
+    supervisedRepos: [],
     ...overrides,
   }
 }
@@ -55,6 +58,12 @@ const SESSION_OTHER = {
   issues_succeeded: 1,
   issues_failed: 0,
   status: 'completed',
+}
+
+const SUPERVISED_REPO = {
+  slug: 'demo',
+  path: '/repos/demo',
+  running: true,
 }
 
 // ---------------------------------------------------------------------------
@@ -140,6 +149,60 @@ describe('SessionSidebar with multiple repos', () => {
     render(<SessionSidebar />)
     expect(screen.getByText('org/repo')).toBeDefined()
     expect(screen.getByText('other-org/other-repo')).toBeDefined()
+  })
+
+  it('fires addRepoShortcut when clicking the add button', () => {
+    const addRepoShortcut = vi.fn()
+    mockUseHydraFlow.mockReturnValue(
+      defaultContext({ sessions: [SESSION_A], addRepoShortcut })
+    )
+    render(<SessionSidebar />)
+    fireEvent.click(screen.getByLabelText('Add repo org/repo'))
+    expect(addRepoShortcut).toHaveBeenCalledWith('org/repo')
+  })
+
+  it('fires removeRepoShortcut when clicking the remove button', () => {
+    const removeRepoShortcut = vi.fn()
+    mockUseHydraFlow.mockReturnValue(
+      defaultContext({ sessions: [SESSION_A], removeRepoShortcut })
+    )
+    render(<SessionSidebar />)
+    fireEvent.click(screen.getByLabelText('Remove repo org/repo'))
+    expect(removeRepoShortcut).toHaveBeenCalledWith('org/repo')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Supervised repos fallback
+// ---------------------------------------------------------------------------
+
+describe('SessionSidebar supervised repo state', () => {
+  it('renders supervised repo even when no sessions exist', () => {
+    mockUseHydraFlow.mockReturnValue(
+      defaultContext({ supervisedRepos: [SUPERVISED_REPO] })
+    )
+    render(<SessionSidebar />)
+    expect(screen.getByText('demo')).toBeDefined()
+    expect(screen.getByText('/repos/demo')).toBeDefined()
+    expect(screen.getByText('RUNNING')).toBeDefined()
+  })
+
+  it('uses slug when firing add/remove shortcuts for supervised-only repo', () => {
+    const addRepoShortcut = vi.fn()
+    const removeRepoShortcut = vi.fn()
+    mockUseHydraFlow.mockReturnValue(
+      defaultContext({
+        supervisedRepos: [{ ...SUPERVISED_REPO, running: false }],
+        addRepoShortcut,
+        removeRepoShortcut,
+      })
+    )
+    render(<SessionSidebar />)
+    fireEvent.click(screen.getByLabelText('Add repo demo'))
+    fireEvent.click(screen.getByLabelText('Remove repo demo'))
+    expect(addRepoShortcut).toHaveBeenCalledWith('demo')
+    expect(removeRepoShortcut).toHaveBeenCalledWith('demo')
+    expect(screen.getByText('STOPPED')).toBeDefined()
   })
 })
 

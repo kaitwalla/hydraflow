@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING, Any
 
 from fastapi import APIRouter, Response, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
-from pydantic import ValidationError
+from pydantic import BaseModel, ValidationError
 
 from config import HydraFlowConfig, save_config_file
 from events import EventBus, EventType, HydraFlowEvent
@@ -74,6 +74,14 @@ def create_router(
 ) -> APIRouter:
     """Create an APIRouter with all dashboard route handlers."""
     router = APIRouter()
+
+    class RepoAddRequest(BaseModel):
+        slug: str | None = None
+
+    try:
+        from hf_cli import supervisor_client
+    except ImportError:  # pragma: no cover - env missing CLI
+        supervisor_client = None  # type: ignore[assignment]
 
     def _serve_spa_index() -> HTMLResponse:
         """Serve the SPA index.html, falling back to template or placeholder."""
@@ -830,6 +838,75 @@ def create_router(
         if timeline is None:
             return JSONResponse({"error": "Issue not found"}, status_code=404)
         return JSONResponse(timeline.model_dump())
+
+    # --- Multi-repo supervisor endpoints ---
+
+    async def _call_supervisor(func: Callable, *args, **kwargs) -> Any:
+        if supervisor_client is None:
+            raise RuntimeError("hf supervisor client unavailable in this environment")
+        return await asyncio.to_thread(func, *args, **kwargs)
+
+    @router.get("/api/repos")
+    async def list_supervised_repos() -> JSONResponse:
+        if supervisor_client is None:
+            return JSONResponse({"repos": []})
+        try:
+            repos = await _call_supervisor(supervisor_client.list_repos)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Supervisor list_repos failed: %s", exc)
+            return JSONResponse({"error": str(exc)}, status_code=503)
+        return JSONResponse({"repos": repos})
+
+    @router.post("/api/repos")
+    async def ensure_repo(req: RepoAddRequest) -> JSONResponse:
+        error_payload: tuple[str, int] | None = None
+        if supervisor_client is None:
+            error_payload = ("supervisor unavailable", 503)
+        else:
+            slug = (req.slug or "").strip()
+            if not slug:
+                error_payload = ("slug required", 400)
+            else:
+                try:
+                    repos = await _call_supervisor(supervisor_client.list_repos)
+                except Exception as exc:  # noqa: BLE001
+                    error_payload = (str(exc), 503)
+                else:
+                    match = next((r for r in repos if r.get("slug") == slug), None)
+                    if not match:
+                        error_payload = (f"slug '{slug}' not registered", 404)
+                    else:
+                        path = match.get("path")
+                        if not path:
+                            error_payload = (f"slug '{slug}' missing path", 500)
+                        else:
+                            try:
+                                info = await _call_supervisor(
+                                    supervisor_client.add_repo,
+                                    Path(path),
+                                    slug,
+                                )
+                            except Exception as exc:  # noqa: BLE001
+                                logger.warning("Supervisor add_repo failed: %s", exc)
+                                error_payload = (str(exc), 500)
+                            else:
+                                return JSONResponse(info)
+
+        if error_payload:
+            message, status_code = error_payload
+            return JSONResponse({"error": message}, status_code=status_code)
+        return JSONResponse({"status": "ok"})
+
+    @router.delete("/api/repos/{slug}")
+    async def remove_repo(slug: str) -> JSONResponse:
+        if supervisor_client is None:
+            return JSONResponse({"error": "supervisor unavailable"}, status_code=503)
+        try:
+            await _call_supervisor(supervisor_client.remove_repo, None, slug)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Supervisor remove_repo failed: %s", exc)
+            return JSONResponse({"error": str(exc)}, status_code=500)
+        return JSONResponse({"status": "ok"})
 
     @router.post("/api/intent")
     async def submit_intent(request: IntentRequest) -> JSONResponse:
