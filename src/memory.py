@@ -401,7 +401,7 @@ class MemorySyncWorker:
         """
         # --- Step 1: Deduplicate by keyword overlap ---
         seen_keywords: list[set[str]] = []
-        unique: list[MemorySyncWorker._TypedLearning] = []
+        unique: list[MemorySyncWorker._LearningRecord] = []
 
         for record in learnings:
             num, learning, created, mtype = self._coerce_learning_tuple(record)
@@ -428,8 +428,9 @@ class MemorySyncWorker:
         )
 
         by_type: dict[MemoryType, list[tuple[int, str]]] = {}
-        for num, learning, _, mtype in unique:
-            by_type.setdefault(mtype, []).append((num, learning))
+        for record in unique:
+            num, learning, _, memory_type = self._coerce_learning_tuple(record)
+            by_type.setdefault(memory_type, []).append((num, learning))
 
         sections: list[str] = []
         for mtype in MEMORY_TYPE_DISPLAY_ORDER:

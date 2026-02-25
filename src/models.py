@@ -606,6 +606,8 @@ class StateData(BaseModel):
     manifest_snapshot_hash: str = ""
     manifest_hash: str = ""
     manifest_last_updated: str | None = None
+    manifest_issue_number: int | None = None
+    manifest_snapshot_hash: str = ""
     metrics_issue_number: int | None = None
     metrics_last_snapshot_hash: str = ""
     metrics_last_synced: str | None = None
@@ -699,6 +701,7 @@ class ControlStatusConfig(BaseModel):
     fixed_label: list[str] = Field(default_factory=list)
     improve_label: list[str] = Field(default_factory=list)
     memory_label: list[str] = Field(default_factory=list)
+    manifest_label: list[str] = Field(default_factory=list)
     max_workers: int = 0
     max_planners: int = 0
     max_reviewers: int = 0
