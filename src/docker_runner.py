@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import os
 import struct
 from collections.abc import Sequence
 from pathlib import Path
@@ -48,6 +49,10 @@ logger = logging.getLogger("hydraflow.docker_runner")
 _HEADER_SIZE = 8
 _STDOUT_STREAM = 1
 _STDERR_STREAM = 2
+
+_CONTAINER_PI_HOME = "/root/.pi"
+_CONTAINER_CODEX_HOME = "/root/.codex"
+_CONTAINER_CLAUDE_HOME = "/root/.claude"
 
 
 def build_container_kwargs(config: HydraFlowConfig) -> dict[str, Any]:
@@ -283,6 +288,8 @@ class DockerRunner:
         self._spawn_lock = asyncio.Lock()
         self._last_spawn_time: float = 0.0
         self._containers: set[Any] = set()
+        self._user_tool_mounts_cache: dict[str, dict[str, str]] | None = None
+        self._user_tool_mounts_cache_key: tuple[str, str, str, str] | None = None
 
     async def __aenter__(self) -> DockerRunner:
         return self
@@ -298,6 +305,7 @@ class DockerRunner:
         mounts[str(self._repo_root)] = {"bind": "/repo", "mode": "ro"}
         self._log_dir.mkdir(parents=True, exist_ok=True)
         mounts[str(self._log_dir)] = {"bind": "/logs", "mode": "rw"}
+        mounts.update(self._get_user_tool_mounts())
         for spec in self._extra_mounts:
             parts = spec.split(":")
             if len(parts) >= 2:
@@ -305,15 +313,72 @@ class DockerRunner:
                 mounts[parts[0]] = {"bind": parts[1], "mode": mode}
         return mounts
 
+    def _get_user_tool_mounts(self) -> dict[str, dict[str, str]]:
+        """Return cached user-tool mounts, refreshing when env/home selection changes."""
+        key = (
+            str(Path.home()),
+            os.environ.get("PI_CODING_AGENT_DIR", "").strip(),
+            os.environ.get("CODEX_HOME", "").strip(),
+            os.environ.get("CLAUDE_CONFIG_DIR", "").strip(),
+        )
+        if (
+            self._user_tool_mounts_cache is None
+            or key != self._user_tool_mounts_cache_key
+        ):
+            self._user_tool_mounts_cache = self._build_user_tool_mounts()
+            self._user_tool_mounts_cache_key = key
+        return dict(self._user_tool_mounts_cache)
+
+    def _build_user_tool_mounts(self) -> dict[str, dict[str, str]]:
+        """Mount host user agent settings into container when present."""
+        mounts: dict[str, dict[str, str]] = {}
+        home = Path.home()
+
+        pi_dir_raw = os.environ.get("PI_CODING_AGENT_DIR", "").strip()
+        if pi_dir_raw:
+            pi_dir = Path(pi_dir_raw).expanduser()
+            if pi_dir.exists():
+                mounts[str(pi_dir)] = {
+                    "bind": f"{_CONTAINER_PI_HOME}/agent",
+                    "mode": "rw",
+                }
+        else:
+            pi_root = home / ".pi"
+            if pi_root.exists():
+                mounts[str(pi_root)] = {"bind": _CONTAINER_PI_HOME, "mode": "rw"}
+
+        codex_home_raw = os.environ.get("CODEX_HOME", "").strip()
+        codex_home = (
+            Path(codex_home_raw).expanduser() if codex_home_raw else home / ".codex"
+        )
+        if codex_home.exists():
+            mounts[str(codex_home)] = {"bind": _CONTAINER_CODEX_HOME, "mode": "rw"}
+
+        claude_home_raw = os.environ.get("CLAUDE_CONFIG_DIR", "").strip()
+        claude_home = (
+            Path(claude_home_raw).expanduser() if claude_home_raw else home / ".claude"
+        )
+        if claude_home.exists():
+            mounts[str(claude_home)] = {"bind": _CONTAINER_CLAUDE_HOME, "mode": "rw"}
+
+        return mounts
+
     def _build_env(self) -> dict[str, str]:
         """Build minimal environment for the container."""
         from subprocess_util import make_docker_env  # noqa: PLC0415
 
-        return make_docker_env(
+        env = make_docker_env(
             gh_token=self._gh_token,
             git_user_name=self._git_user_name,
             git_user_email=self._git_user_email,
         )
+        if env.get("PI_CODING_AGENT_DIR"):
+            env["PI_CODING_AGENT_DIR"] = f"{_CONTAINER_PI_HOME}/agent"
+        if env.get("CODEX_HOME"):
+            env["CODEX_HOME"] = _CONTAINER_CODEX_HOME
+        if env.get("CLAUDE_CONFIG_DIR"):
+            env["CLAUDE_CONFIG_DIR"] = _CONTAINER_CLAUDE_HOME
+        return env
 
     def _get_resource_kwargs(self) -> dict[str, Any]:
         """Get resource limit and security kwargs from config, if available."""
