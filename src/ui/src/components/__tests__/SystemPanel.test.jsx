@@ -747,8 +747,13 @@ describe('BackgroundWorkerCard schedule display', () => {
     render(<SystemPanel backgroundWorkers={bgWorkers} onUpdateInterval={() => {}} />)
     fireEvent.click(screen.getByTestId('edit-interval-pipeline_poller'))
     expect(screen.getByTestId('interval-editor-pipeline_poller')).toBeInTheDocument()
-    expect(screen.getByTestId('preset-30m')).toBeInTheDocument()
-    expect(screen.getByTestId('preset-1h')).toBeInTheDocument()
+    expect(screen.getByTestId('preset-5s')).toBeInTheDocument()
+    expect(screen.getByTestId('preset-10s')).toBeInTheDocument()
+    expect(screen.getByTestId('preset-15s')).toBeInTheDocument()
+    expect(screen.queryByTestId('preset-30m')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('preset-1h')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('preset-2h')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('preset-4h')).not.toBeInTheDocument()
   })
 
   it('calls onUpdateInterval with pipeline_poller when preset clicked', () => {
@@ -759,7 +764,7 @@ describe('BackgroundWorkerCard schedule display', () => {
     ]
     render(<SystemPanel backgroundWorkers={bgWorkers} onUpdateInterval={onUpdate} />)
     fireEvent.click(screen.getByTestId('edit-interval-pipeline_poller'))
-    fireEvent.click(screen.getByTestId('preset-1h'))
-    expect(onUpdate).toHaveBeenCalledWith('pipeline_poller', 3600)
+    fireEvent.click(screen.getByTestId('preset-10s'))
+    expect(onUpdate).toHaveBeenCalledWith('pipeline_poller', 10)
   })
 })
