@@ -298,6 +298,10 @@ class ConfigFactory:
         visual_validation_trigger_patterns: list[str] | None = None,
         visual_required_label: str = "hydraflow-visual-required",
         visual_skip_label: str = "hydraflow-visual-skip",
+        visual_max_retries: int = 2,
+        visual_retry_delay: float = 0.0,
+        visual_warn_threshold: float = 0.05,
+        visual_fail_threshold: float = 0.15,
         screenshot_redaction_enabled: bool = True,
         screenshot_gist_public: bool = False,
     ):
@@ -499,6 +503,10 @@ class ConfigFactory:
             ),
             visual_required_label=visual_required_label,
             visual_skip_label=visual_skip_label,
+            visual_max_retries=visual_max_retries,
+            visual_retry_delay=visual_retry_delay,
+            visual_warn_threshold=visual_warn_threshold,
+            visual_fail_threshold=visual_fail_threshold,
             screenshot_redaction_enabled=screenshot_redaction_enabled,
             screenshot_gist_public=screenshot_gist_public,
         )
