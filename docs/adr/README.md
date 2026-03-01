@@ -27,6 +27,7 @@ and optionally **Alternatives considered** and **Related** links.
 | [0014](0014-session-counter-forward-progression-semantics.md) | Session Counter Forward-Progression Semantics | Proposed |
 | [0015](0015-protocol-callback-gate-pattern.md) | Protocol-Based Callback Injection Gate Pattern | Proposed |
 | [0016](0016-visual-validation-skipped-override-semantics.md) | VisualValidation SKIPPED Override Semantics | Proposed |
+| [0017](0017-auto-decompose-triage-counter-exclusion.md) | Auto-Decompose Triage Counter Exclusion | Proposed |
 
 ## Adding a new ADR
 
