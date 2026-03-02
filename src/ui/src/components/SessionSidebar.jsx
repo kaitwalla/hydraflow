@@ -184,7 +184,7 @@ export function SessionSidebar() {
             value={addRepoValue}
             onChange={(e) => { setAddRepoError(''); setAddRepoValue(e.target.value) }}
             onKeyDown={handleAddRepoKeyDown}
-            placeholder="owner/repo"
+            placeholder="owner/repo or /path/to/repo"
             disabled={isAddRepoSubmitting}
             aria-invalid={addRepoError ? 'true' : undefined}
             style={addRepoError ? addRepoInputError : styles.addRepoInput}

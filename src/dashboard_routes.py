@@ -6,11 +6,13 @@ import asyncio
 import contextlib
 import importlib
 import logging
+import os
+import tempfile
 import time
 from collections import Counter
 from collections.abc import Callable, Iterable
 from datetime import UTC, datetime
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import TYPE_CHECKING, Any
 
 from fastapi import APIRouter, Query, Response, WebSocket, WebSocketDisconnect
@@ -306,6 +308,9 @@ def create_router(
 
     class RepoAddRequest(BaseModel):
         slug: str | None = None
+
+    class RepoAddByPathRequest(BaseModel):
+        path: str
 
     def _resolve_runtime(
         slug: str | None,
@@ -1330,6 +1335,7 @@ def create_router(
                 model=_cfg.model,
                 memory_auto_approve=_cfg.memory_auto_approve,
                 pr_unstick_batch_size=_cfg.pr_unstick_batch_size,
+                worktree_base=str(_cfg.worktree_base),
             ),
         )
         data = response.model_dump()
@@ -1362,6 +1368,7 @@ def create_router(
         "unstick_all_causes",
         "auto_process_epics",
         "auto_process_bug_reports",
+        "worktree_base",
         "auto_crate",
     }
 
@@ -2698,6 +2705,150 @@ def create_router(
             return JSONResponse({"error": "Failed to remove repo"}, status_code=500)
         return JSONResponse({"status": "ok"})
 
+    async def _detect_repo_slug_from_path(repo_path: Path) -> str | None:  # noqa: PLR0911
+        """Extract ``owner/repo`` from git remote origin URL at *repo_path*."""
+        from urllib.parse import urlparse  # noqa: PLC0415
+
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                "git",
+                "-C",
+                str(repo_path),
+                "remote",
+                "get-url",
+                "origin",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=10)
+        except (FileNotFoundError, OSError, TimeoutError):
+            return None
+        url = (stdout or b"").decode().strip()
+        if not url:
+            return None
+        if url.startswith(("http://", "https://")):
+            parsed = urlparse(url)
+            host = (parsed.hostname or "").lower()
+            if host != "github.com":
+                return None
+            return parsed.path.lstrip("/").removesuffix(".git") or None
+        if url.startswith("git@"):
+            if "@" not in url or ":" not in url:
+                return None
+            user_host, _, remainder = url.partition(":")
+            _, _, host = user_host.partition("@")
+            if host.lower() != "github.com":
+                return None
+            slug = remainder.lstrip("/").removesuffix(".git")
+            return slug or None
+        return None
+
+    @router.post("/api/repos/add")
+    async def add_repo_by_path(req: RepoAddByPathRequest) -> JSONResponse:  # noqa: PLR0911
+        """Register a repo by local filesystem path (does NOT start it)."""
+        raw_path = (req.path or "").strip()
+        if not raw_path:
+            return JSONResponse({"error": "path required"}, status_code=400)
+        home_root = os.path.realpath(str(Path.home()))
+        temp_root = os.path.realpath(tempfile.gettempdir())
+        expanded_input = os.path.expanduser(raw_path)
+        base_root: str | None = None
+        relative_fragment = ""
+        if expanded_input == home_root:
+            base_root = home_root
+        elif expanded_input.startswith(f"{home_root}{os.sep}"):
+            base_root = home_root
+            relative_fragment = expanded_input.removeprefix(f"{home_root}{os.sep}")
+        elif expanded_input == temp_root:
+            base_root = temp_root
+        elif expanded_input.startswith(f"{temp_root}{os.sep}"):
+            base_root = temp_root
+            relative_fragment = expanded_input.removeprefix(f"{temp_root}{os.sep}")
+        if base_root is None:
+            return JSONResponse(
+                {"error": "path must be inside your home directory or temp directory"},
+                status_code=400,
+            )
+        normalized_path = os.path.realpath(os.path.join(base_root, relative_fragment))
+        if normalized_path != base_root and not normalized_path.startswith(
+            f"{base_root}{os.sep}"
+        ):
+            return JSONResponse(
+                {"error": "path must be inside your home directory or temp directory"},
+                status_code=400,
+            )
+        repo_path = Path(normalized_path)
+        if not repo_path.is_dir():
+            return JSONResponse(
+                {"error": f"path does not exist: {raw_path}"},
+                status_code=400,
+            )
+        # Validate it's a git repo
+        is_git = False
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                "git",
+                "-C",
+                str(repo_path),
+                "rev-parse",
+                "--git-dir",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            await asyncio.wait_for(proc.communicate(), timeout=10)
+            is_git = proc.returncode == 0
+        except (FileNotFoundError, OSError, TimeoutError):
+            pass
+        if not is_git:
+            return JSONResponse(
+                {"error": f"not a git repository: {raw_path}"},
+                status_code=400,
+            )
+        # Detect slug
+        slug = await _detect_repo_slug_from_path(repo_path)
+        # Create labels (best-effort)
+        labels_created = False
+        if slug:
+            try:
+                from prep import ensure_labels  # noqa: PLC0415
+
+                target_cfg = config.model_copy(
+                    update={
+                        "repo_root": repo_path,
+                        "repo": slug,
+                    },
+                )
+                await ensure_labels(target_cfg)
+                labels_created = True
+            except Exception:  # noqa: BLE001
+                logger.warning("Label creation failed for %s", slug, exc_info=True)
+        # Register with supervisor
+        if supervisor_client is None:
+            return JSONResponse(
+                {"error": "supervisor unavailable"},
+                status_code=503,
+            )
+        try:
+            await _call_supervisor(
+                supervisor_client.register_repo,
+                repo_path,
+                slug,
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Supervisor register_repo failed: %s", exc)
+            return JSONResponse(
+                {"error": "Failed to register repo"},
+                status_code=500,
+            )
+        return JSONResponse(
+            {
+                "status": "ok",
+                "slug": slug or repo_path.name,
+                "path": str(repo_path),
+                "labels_created": labels_created,
+            }
+        )
+
     @router.post("/api/intent")
     async def submit_intent(request: IntentRequest) -> JSONResponse:
         """Create a GitHub issue from a user intent typed in the dashboard."""
@@ -2781,9 +2932,10 @@ def create_router(
             for event in history:
                 try:
                     await ws.send_text(event.model_dump_json())
-                except Exception:
+                except Exception as exc:
                     logger.warning(
-                        "WebSocket error during history replay", exc_info=True
+                        "WebSocket error during history replay: %s",
+                        exc.__class__.__name__,
                     )
                     return
 
@@ -2794,8 +2946,11 @@ def create_router(
                     await ws.send_text(event.model_dump_json())
             except WebSocketDisconnect:
                 pass
-            except Exception:
-                logger.warning("WebSocket error during live streaming", exc_info=True)
+            except Exception as exc:
+                logger.warning(
+                    "WebSocket error during live streaming: %s",
+                    exc.__class__.__name__,
+                )
 
     # SPA catch-all: serve index.html for any path not matched above.
     # This must be registered LAST so it doesn't shadow API/WS routes.
@@ -2805,10 +2960,16 @@ def create_router(
         if path.startswith(("api/", "ws/", "assets/", "static/")) or path == "ws":
             return JSONResponse({"detail": "Not Found"}, status_code=404)
 
-        # Serve root-level static files from ui/dist/ (e.g. logos, favicon)
-        static_file = (ui_dist_dir / path).resolve()
-        if static_file.is_relative_to(ui_dist_dir.resolve()) and static_file.is_file():
-            return FileResponse(static_file)
+        # Serve only root-level static files from ui/dist/ (e.g. logos, favicon).
+        # Reject nested/relative segments to prevent path traversal.
+        path_parts = PurePosixPath(path).parts
+        if len(path_parts) == 1 and path_parts[0] not in {"", ".", ".."}:
+            static_file = (ui_dist_dir / path_parts[0]).resolve()
+            if (
+                static_file.is_relative_to(ui_dist_dir.resolve())
+                and static_file.is_file()
+            ):
+                return FileResponse(static_file)
 
         return _serve_spa_index()
 

@@ -900,9 +900,32 @@ export function HydraFlowProvider({ children }) {
     }
   }, [fetchRepos])
 
-  const addRepoShortcut = useCallback(async (repoSlug) => {
-    return ensureRepoRunning(repoSlug)
-  }, [ensureRepoRunning])
+  const addRepoByPath = useCallback(async (repoPath) => {
+    const path = (repoPath || '').trim()
+    if (!path) return { ok: false, error: 'path required' }
+    try {
+      const res = await fetch('/api/repos/add', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ path }),
+      })
+      if (!res.ok) {
+        let errorMsg = `status ${res.status}`
+        try { const body = await res.json(); if (body.error) errorMsg = body.error } catch { /* ignore */ }
+        return { ok: false, error: errorMsg }
+      }
+      await fetchRepos()
+      return { ok: true }
+    } catch (err) {
+      return { ok: false, error: err.message || 'Network error' }
+    }
+  }, [fetchRepos])
+
+  const addRepoShortcut = useCallback(async (input) => {
+    if (input.startsWith('/') || input.startsWith('~') || input.startsWith('.'))
+      return addRepoByPath(input)
+    return ensureRepoRunning(input)
+  }, [addRepoByPath, ensureRepoRunning])
 
   const removeRepoShortcut = useCallback((repoSlug) => {
     removeRepo(repoSlug)
@@ -1255,6 +1278,7 @@ export function HydraFlowProvider({ children }) {
     selectSession,
     selectRepo,
     deleteSession,
+    addRepoByPath,
     addRepoShortcut,
     removeRepoShortcut,
     startRuntime,
