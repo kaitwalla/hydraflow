@@ -877,29 +877,6 @@ export function HydraFlowProvider({ children }) {
     return String(value || '').trim().replace(/[\\/]+/g, '-').toLowerCase()
   }, [])
 
-  const slugTail = useCallback((value) => {
-    const normalized = canonicalSlug(value)
-    if (!normalized) return ''
-    const parts = normalized.split('-').filter(Boolean)
-    return parts.length > 0 ? parts[parts.length - 1] : normalized
-  }, [canonicalSlug])
-
-  const isAdjacentSwap = useCallback((a, b) => {
-    if (a === b || a.length !== b.length || a.length < 2) return false
-    let first = -1
-    let second = -1
-    for (let i = 0; i < a.length; i += 1) {
-      if (a[i] !== b[i]) {
-        if (first === -1) first = i
-        else if (second === -1) second = i
-        else return false
-      }
-    }
-    if (first === -1 || second === -1) return false
-    if (second !== first + 1) return false
-    return a[first] === b[second] && a[second] === b[first]
-  }, [])
-
   const postCompat = useCallback(async (url, options) => {
     const payloads = Array.isArray(options?.payloads) ? options.payloads : []
     const queryPayloads = Array.isArray(options?.queryPayloads) ? options.queryPayloads : []
@@ -946,18 +923,14 @@ export function HydraFlowProvider({ children }) {
       // Compatibility mode: when runtime route is unavailable or validation shape differs,
       // start via supervisor-compatible endpoints.
       if (runtimeRes.status === 404 || runtimeRes.status === 405 || runtimeRes.status === 422 || runtimeRes.status === 501) {
-        const preferredPath = String(repoPath || '').trim()
         const repoRes = await postCompat('/api/repos', {
           payloads: [
-            { slug, ...(preferredPath ? { path: preferredPath } : {}) },
-            { req: { slug, ...(preferredPath ? { path: preferredPath } : {}) } },
-            { repo: slug, ...(preferredPath ? { repo_path: preferredPath } : {}) },
-            { req: { repo: slug, ...(preferredPath ? { repo_path: preferredPath } : {}) } },
+            { slug },
+            { req: { slug } },
+            { repo: slug },
+            { req: { repo: slug } },
           ],
-          queryPayloads: [
-            { slug, ...(preferredPath ? { path: preferredPath } : {}) },
-            { repo: slug, ...(preferredPath ? { repo_path: preferredPath } : {}) },
-          ],
+          queryPayloads: [{ slug }, { repo: slug }],
         })
         // Older/mixed backends may reject /api/repos payload contracts; fallback to
         // direct path-based /api/repos/add when /api/repos is non-OK.
@@ -975,20 +948,10 @@ export function HydraFlowProvider({ children }) {
             const payload = await listRes.json()
             const repos = Array.isArray(payload?.repos) ? payload.repos : []
             const targetSlug = canonicalSlug(slug)
-            const targetTail = slugTail(slug)
             const match = repos.find((repo) => {
               const repoSlug = canonicalSlug(repo?.slug)
               const repoPathSlug = canonicalSlug(repo?.path)
-              const repoPathTail = slugTail(repo?.path)
-              const repoSlugTail = slugTail(repo?.slug)
-              return (
-                repoSlug === targetSlug
-                || repoPathSlug.endsWith(`-${targetSlug}`)
-                || (targetTail && repoPathTail === targetTail)
-                || (targetTail && repoSlugTail === targetTail)
-                || (targetTail && repoPathTail && isAdjacentSwap(repoPathTail, targetTail))
-                || (targetTail && repoSlugTail && isAdjacentSwap(repoSlugTail, targetTail))
-              )
+              return repoSlug === targetSlug || repoPathSlug.endsWith(`-${targetSlug}`)
             })
             path = String(match?.path || '').trim()
           }
@@ -1011,34 +974,6 @@ export function HydraFlowProvider({ children }) {
             )
             return { ok: false, error: message }
           }
-          let ensuredSlug = slug
-          try {
-            const addBody = await addRes.json()
-            if (typeof addBody?.slug === 'string' && addBody.slug.trim()) {
-              ensuredSlug = addBody.slug.trim()
-            }
-          } catch {
-            // Ignore non-JSON responses; keep original slug.
-          }
-          const repoResAfterAdd = await postCompat('/api/repos', {
-            payloads: [
-              { slug: ensuredSlug, ...(path ? { path } : {}) },
-              { req: { slug: ensuredSlug, ...(path ? { path } : {}) } },
-              { repo: ensuredSlug, ...(path ? { repo_path: path } : {}) },
-              { req: { repo: ensuredSlug, ...(path ? { repo_path: path } : {}) } },
-            ],
-            queryPayloads: [
-              { slug: ensuredSlug, ...(path ? { path } : {}) },
-              { repo: ensuredSlug, ...(path ? { repo_path: path } : {}) },
-            ],
-          })
-          if (!repoResAfterAdd.ok) {
-            const message = await parseApiError(
-              repoResAfterAdd,
-              `Failed to start repo (${repoResAfterAdd.status})`,
-            )
-            return { ok: false, error: message }
-          }
           await Promise.all([fetchRepos(), fetchRuntimes()])
           return { ok: true }
         }
@@ -1055,38 +990,13 @@ export function HydraFlowProvider({ children }) {
       console.warn('Failed to start runtime', slug, err)
       return { ok: false, error: err?.message || 'Failed to start runtime' }
     }
-  }, [fetchRuntimes, fetchRepos, parseApiError, canonicalSlug, slugTail, isAdjacentSwap, postCompat])
+  }, [fetchRuntimes, fetchRepos, parseApiError, canonicalSlug, postCompat])
 
-  const stopRuntime = useCallback(async (slug, repoPath = null) => {
+  const stopRuntime = useCallback(async (slug) => {
     try {
       const res = await fetch(`/api/runtimes/${encodeURIComponent(slug)}/stop`, {
         method: 'POST',
       })
-      if (res.ok) {
-        await Promise.all([fetchRuntimes(), fetchRepos()])
-        return { ok: true }
-      }
-      // Compatibility mode: runtime registry route unavailable.
-      if (res.status === 404 || res.status === 405 || res.status === 422 || res.status === 501) {
-        const params = new URLSearchParams()
-        params.set('slug', slug)
-        if (String(repoPath || '').trim()) {
-          params.set('path', String(repoPath).trim())
-        }
-        const suffix = `?${params.toString()}`
-        const compatRes = await fetch(`/api/repos${suffix}`, {
-          method: 'DELETE',
-        })
-        if (!compatRes.ok) {
-          const message = await parseApiError(
-            compatRes,
-            `Failed to stop runtime (${compatRes.status})`,
-          )
-          return { ok: false, error: message }
-        }
-        await Promise.all([fetchRuntimes(), fetchRepos()])
-        return { ok: true }
-      }
       if (!res.ok) {
         const message = await parseApiError(
           res,
@@ -1094,13 +1004,13 @@ export function HydraFlowProvider({ children }) {
         )
         return { ok: false, error: message }
       }
-      await Promise.all([fetchRuntimes(), fetchRepos()])
+      await fetchRuntimes()
       return { ok: true }
     } catch (err) {
       console.warn('Failed to stop runtime', slug, err)
       return { ok: false, error: err?.message || 'Failed to stop runtime' }
     }
-  }, [fetchRuntimes, fetchRepos, parseApiError])
+  }, [fetchRuntimes, parseApiError])
 
   const removeRepo = useCallback(async (repoSlug) => {
     const slug = (repoSlug || '').trim()
@@ -1262,6 +1172,47 @@ export function HydraFlowProvider({ children }) {
       dispatch({ type: 'HUMAN_INPUT_SUBMITTED', data: { issueNumber } })
     } catch { /* ignore */ }
   }, [])
+
+  const refreshControlStatus = useCallback(async () => {
+    try {
+      const res = await fetch('/api/control/status')
+      if (!res.ok) return false
+      const data = await res.json()
+      dispatch({
+        type: 'orchestrator_status',
+        data: { status: data.status, credits_paused_until: data.credits_paused_until },
+        timestamp: new Date().toISOString(),
+      })
+      if (data.config) {
+        dispatch({ type: 'CONFIG', data: data.config })
+      }
+      return true
+    } catch {
+      return false
+    }
+  }, [])
+
+  const startOrchestrator = useCallback(async () => {
+    try {
+      const res = await fetch('/api/control/start', { method: 'POST' })
+      if (!res.ok) return false
+      await refreshControlStatus()
+      return true
+    } catch {
+      return false
+    }
+  }, [refreshControlStatus])
+
+  const stopOrchestrator = useCallback(async () => {
+    try {
+      const res = await fetch('/api/control/stop', { method: 'POST' })
+      if (!res.ok) return false
+      await refreshControlStatus()
+      return true
+    } catch {
+      return false
+    }
+  }, [refreshControlStatus])
 
   const connect = useCallback(() => {
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
@@ -1491,6 +1442,8 @@ export function HydraFlowProvider({ children }) {
     removeRepoShortcut,
     startRuntime,
     stopRuntime,
+    startOrchestrator,
+    stopOrchestrator,
     releaseEpic,
   }
 
