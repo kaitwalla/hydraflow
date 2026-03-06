@@ -50,9 +50,10 @@ _HEADER_SIZE = 8
 _STDOUT_STREAM = 1
 _STDERR_STREAM = 2
 
-_CONTAINER_PI_HOME = "/root/.pi"
-_CONTAINER_CODEX_HOME = "/root/.codex"
-_CONTAINER_CLAUDE_HOME = "/root/.claude"
+_CONTAINER_HOME = "/home/hydraflow"
+_CONTAINER_PI_HOME = f"{_CONTAINER_HOME}/.pi"
+_CONTAINER_CODEX_HOME = f"{_CONTAINER_HOME}/.codex"
+_CONTAINER_CLAUDE_HOME = f"{_CONTAINER_HOME}/.claude"
 
 
 def build_container_kwargs(config: HydraFlowConfig) -> dict[str, Any]:
@@ -360,6 +361,16 @@ class DockerRunner:
         )
         if claude_home.exists():
             mounts[str(claude_home)] = {"bind": _CONTAINER_CLAUDE_HOME, "mode": "rw"}
+
+        # Claude CLI stores auth tokens in ~/.claude.json (separate from
+        # the ~/.claude/ config directory).  Without this file the CLI
+        # reports "Not logged in" and produces no useful output.
+        claude_json = home / ".claude.json"
+        if claude_json.is_file():
+            mounts[str(claude_json)] = {
+                "bind": f"{_CONTAINER_HOME}/.claude.json",
+                "mode": "rw",
+            }
 
         return mounts
 

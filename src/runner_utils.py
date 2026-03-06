@@ -159,6 +159,17 @@ async def stream_claude_process(
                     stderr_text[:500],
                 )
 
+            # Detect authentication failures from stream-json output.
+            # Claude CLI emits '"error":"authentication_failed"' when it
+            # has no valid API key or OAuth session (common in Docker
+            # containers without ANTHROPIC_API_KEY).
+            raw_output = "\n".join(raw_lines)
+            if "authentication_failed" in raw_output:
+                raise RuntimeError(
+                    "Agent CLI authentication failed — set ANTHROPIC_API_KEY "
+                    "in .env for Docker execution mode"
+                )
+
             # Check for credit exhaustion in both stderr and transcript.
             # Skip when early_killed=True — the process was intentionally killed by us
             # because it produced its expected output; credit phrases in legitimate
@@ -173,7 +184,21 @@ async def stream_claude_process(
             if usage_stats is not None:
                 usage_stats.update(parser.usage_snapshot)
 
-            return result_text or accumulated_text.rstrip("\n") or "\n".join(raw_lines)
+            transcript = (
+                result_text or accumulated_text.rstrip("\n") or "\n".join(raw_lines)
+            )
+
+            # Log stderr when transcript is empty — this is the only place
+            # stderr content is available and it's critical for diagnosing
+            # silent subprocess failures (e.g. CLI auth errors, missing flags).
+            if not transcript.strip() and stderr_text:
+                logger.warning(
+                    "Process produced empty stdout (rc=%d), stderr: %s",
+                    proc.returncode or 0,
+                    stderr_text[:500],
+                )
+
+            return transcript
 
         return await asyncio.wait_for(_stream_body(), timeout=timeout)
     except TimeoutError:
