@@ -394,7 +394,8 @@ class TestSummarizeAndComment:
         cmd = call_args[0][0]
         assert cmd[0] == "claude"
         assert cmd[1] == "-p"
-        # Prompt is the last CLI arg, not stdin
+        # Prompt must be immediately after -p for the CLI to recognise it.
+        assert cmd[2] not in ("--model",), "prompt must follow -p, not a flag"
         assert call_args[1].get("input") is None
 
     @pytest.mark.asyncio
@@ -603,8 +604,8 @@ class TestSummarizeAndPublish:
         # Verify the prompt passed as CLI arg was truncated
         call_args = runner.run_simple.call_args
         cmd = call_args[0][0]
-        # Prompt is the last CLI arg
-        prompt_arg = cmd[-1]
+        # Prompt is right after -p (cmd[2])
+        prompt_arg = cmd[cmd.index("-p") + 1]
         assert len(prompt_arg) < 50_000
 
     @pytest.mark.asyncio
