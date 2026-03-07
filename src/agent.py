@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 import re
@@ -131,6 +132,9 @@ Run through this checklist before your final commit:
                 telemetry_stats=prompt_stats,
             )
             result.transcript = transcript
+
+            # Force-commit any uncommitted work the agent left behind
+            await self._force_commit_uncommitted(task, worktree_path)
 
             # Diff sanity check (blocking — agent must fix flagged issues)
             sanity_ok, sanity_msg = await self._run_diff_sanity_loop(
@@ -715,6 +719,7 @@ SUMMARY: <one-line summary>
                 worktree_path,
                 {"issue": issue.id, "source": "implementer"},
             )
+            await self._force_commit_uncommitted(issue, worktree_path)
             review_ok, review_summary = self._parse_skill_result(
                 review_transcript, "PRE_QUALITY_REVIEW_RESULT"
             )
@@ -727,6 +732,7 @@ SUMMARY: <one-line summary>
                 worktree_path,
                 {"issue": issue.id, "source": "implementer"},
             )
+            await self._force_commit_uncommitted(issue, worktree_path)
             run_tool_ok, run_tool_summary = self._parse_skill_result(
                 run_tool_transcript, "RUN_TOOL_RESULT"
             )
@@ -905,6 +911,7 @@ SUMMARY: <one-line summary>
                 worktree_path,
                 {"issue": issue.id, "source": "implementer"},
             )
+            await self._force_commit_uncommitted(issue, worktree_path)
 
             success, verify_msg = await self._verify_result(worktree_path, branch)
             if success:
@@ -913,6 +920,74 @@ SUMMARY: <one-line summary>
             last_error = verify_msg
 
         return False, last_error, max_attempts
+
+    async def _force_commit_uncommitted(self, task: Task, worktree_path: Path) -> bool:
+        """Stage and commit any uncommitted changes the agent left behind.
+
+        Always runs on the **host** (not inside Docker) since the worktree
+        is bind-mounted — file edits from the container are already on disk.
+
+        Docker containers set ``core.worktree=/workspace`` in the worktree's
+        git config, which breaks host-side git (it looks for files at
+        ``/workspace`` instead of the actual worktree path).  We fix this
+        by unsetting ``core.worktree`` before checking status.
+
+        Returns ``True`` if a salvage commit was created, ``False`` otherwise.
+        """
+        from execution import get_default_runner
+
+        host = get_default_runner()
+        timeout = self._config.git_command_timeout
+        cwd = str(worktree_path)
+        # Fix Docker-corrupted core.worktree before any git operation
+        with contextlib.suppress(TimeoutError, FileNotFoundError, OSError):
+            await host.run_simple(
+                ["git", "config", "--unset", "core.worktree"],
+                cwd=cwd,
+                timeout=timeout,
+            )
+
+        try:
+            status = await host.run_simple(
+                ["git", "status", "--porcelain"],
+                cwd=cwd,
+                timeout=timeout,
+            )
+            if not status.stdout.strip():
+                return False
+
+            logger.warning(
+                "Issue #%d: agent left uncommitted changes — force-committing",
+                task.id,
+            )
+            await host.run_simple(
+                ["git", "add", "-A"],
+                cwd=cwd,
+                timeout=timeout,
+            )
+            await host.run_simple(
+                [
+                    "git",
+                    "commit",
+                    "-m",
+                    f"Fixes #{task.id}: {task.title}\n\n"
+                    "Auto-committed by HydraFlow (agent did not commit)",
+                ],
+                cwd=cwd,
+                timeout=timeout,
+            )
+            logger.info(
+                "Issue #%d: salvage commit created for uncommitted work",
+                task.id,
+            )
+            return True
+        except (TimeoutError, FileNotFoundError, OSError) as exc:
+            logger.warning(
+                "Issue #%d: force-commit failed: %s",
+                task.id,
+                exc,
+            )
+            return False
 
     async def _count_commits(self, worktree_path: Path, branch: str) -> int:
         """Count commits on *branch* ahead of main."""
