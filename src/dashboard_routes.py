@@ -8,6 +8,7 @@ import copy
 import json
 import logging
 import os
+import re
 import sys
 import tempfile
 import time
@@ -69,8 +70,11 @@ from models import (
     PipelineSnapshot,
     PipelineSnapshotEntry,
     QueueStats,
+    ReportHistoryEntry,
     ReportIssueRequest,
     ReportIssueResponse,
+    TrackedReport,
+    TrackedReportUpdate,
     parse_task_links,
 )
 from pr_manager import PRManager
@@ -86,6 +90,8 @@ from repo_runtime import RepoRuntime, RepoRuntimeRegistry
 from repo_store import RepoRecord, RepoStore
 
 logger = logging.getLogger("hydraflow.dashboard")
+
+_SAFE_SLUG_COMPONENT = re.compile(r"^[A-Za-z0-9_.\-]+$")
 
 _SUPERVISOR_UNAVAILABLE_PREFIXES: tuple[str, ...] = (
     "hydraflow supervisor is not running.",
@@ -3602,6 +3608,202 @@ def create_router(
             )
         return JSONResponse({"path": str(path)})
 
+    @router.get("/api/github/repos")
+    async def list_github_repos(
+        query: str | None = Query(default=None),
+    ) -> JSONResponse:
+        """List GitHub repos for the authenticated user via ``gh repo list``."""
+        cmd = [
+            "gh",
+            "repo",
+            "list",
+            "--json",
+            "name,owner,url,description",
+            "--limit",
+            "100",
+        ]
+        proc: asyncio.subprocess.Process | None = None
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=30)
+        except FileNotFoundError:
+            return JSONResponse(
+                {
+                    "error": "gh CLI not found — install GitHub CLI and run 'gh auth login'"
+                },
+                status_code=503,
+            )
+        except TimeoutError:
+            if proc is not None:
+                with contextlib.suppress(ProcessLookupError):
+                    proc.kill()
+            return JSONResponse(
+                {"error": "gh CLI timed out"},
+                status_code=504,
+            )
+        if proc.returncode != 0:
+            msg = (stderr or b"").decode().strip()
+            if "auth" in msg.lower() or "login" in msg.lower():
+                return JSONResponse(
+                    {"error": "Not authenticated — run 'gh auth login' first"},
+                    status_code=401,
+                )
+            return JSONResponse(
+                {"error": f"gh repo list failed: {msg}"},
+                status_code=502,
+            )
+        try:
+            repos = json.loads(stdout or b"[]")
+        except json.JSONDecodeError:
+            return JSONResponse(
+                {"error": "Failed to parse gh output"},
+                status_code=502,
+            )
+        # Filter by query if provided
+        if query:
+            q = query.lower()
+            repos = [
+                r
+                for r in repos
+                if q in (r.get("name") or "").lower()
+                or q in ((r.get("owner") or {}).get("login") or "").lower()
+                or q
+                in f"{(r.get('owner') or {}).get('login', '')}/{r.get('name', '')}".lower()
+            ]
+        return JSONResponse({"repos": repos})
+
+    @router.post("/api/github/clone")
+    async def clone_github_repo(  # noqa: PLR0911
+        req: dict[str, Any] | None = Body(default=None),
+    ) -> JSONResponse:
+        """Clone a GitHub repo into the workspace directory and register it."""
+        if not isinstance(req, dict):
+            return JSONResponse({"error": "request body required"}, status_code=400)
+        slug = (req.get("slug") or "").strip()
+        if not slug or "/" not in slug:
+            return JSONResponse(
+                {"error": "slug required in owner/repo format"},
+                status_code=400,
+            )
+        raw_owner, raw_repo = slug.split("/", 1)
+        if not raw_owner or not raw_repo:
+            return JSONResponse(
+                {"error": "slug required in owner/repo format"},
+                status_code=400,
+            )
+        # Validate path components to prevent directory traversal
+        if (
+            not _SAFE_SLUG_COMPONENT.match(raw_owner)
+            or not _SAFE_SLUG_COMPONENT.match(raw_repo)
+            or set(raw_owner) <= {"."}
+            or set(raw_repo) <= {"."}
+        ):
+            return JSONResponse(
+                {"error": "slug contains invalid characters"},
+                status_code=400,
+            )
+        # Sanitise: extract only the final path component to break any
+        # traversal sequences.  PurePosixPath.name is recognised by
+        # CodeQL as a path-injection sanitiser.
+        owner = PurePosixPath(raw_owner).name
+        repo_name = PurePosixPath(raw_repo).name
+        if not owner or not repo_name:
+            return JSONResponse(
+                {"error": "slug contains invalid characters"},
+                status_code=400,
+            )
+        workspace_dir = Path(
+            os.path.expanduser(str(config.repos_workspace_dir))
+        ).resolve()
+        clone_target = (workspace_dir / owner / repo_name).resolve()
+        if not clone_target.is_relative_to(workspace_dir):
+            return JSONResponse(
+                {"error": "slug contains invalid characters"},
+                status_code=400,
+            )
+        # Reconstruct slug from sanitised components
+        slug = f"{owner}/{repo_name}"
+        already_cloned = clone_target.is_dir() and (clone_target / ".git").is_dir()
+        if not already_cloned:
+            workspace_dir.mkdir(parents=True, exist_ok=True)
+            owner_dir = clone_target.parent
+            owner_dir.mkdir(parents=True, exist_ok=True)
+            cmd = ["gh", "repo", "clone", slug, str(clone_target)]
+            clone_proc: asyncio.subprocess.Process | None = None
+            try:
+                clone_proc = await asyncio.create_subprocess_exec(
+                    *cmd,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                )
+                _, stderr = await asyncio.wait_for(
+                    clone_proc.communicate(), timeout=300
+                )
+            except FileNotFoundError:
+                return JSONResponse(
+                    {"error": "gh CLI not found"},
+                    status_code=503,
+                )
+            except TimeoutError:
+                if clone_proc is not None:
+                    with contextlib.suppress(ProcessLookupError):
+                        clone_proc.kill()
+                return JSONResponse(
+                    {"error": "Clone timed out"},
+                    status_code=504,
+                )
+            if clone_proc.returncode != 0:
+                msg = (stderr or b"").decode().strip()
+                return JSONResponse(
+                    {"error": f"Clone failed: {msg}"},
+                    status_code=502,
+                )
+        # Register with the callback or supervisor
+        if register_repo_cb is not None:
+            try:
+                record, repo_cfg = await register_repo_cb(clone_target, slug)
+            except ValueError as exc:
+                logger.warning("register_repo validation error: %s", exc)
+                return JSONResponse(
+                    {"error": "Invalid repository configuration"}, status_code=400
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("register_repo callback failed: %s", exc)
+                return JSONResponse(
+                    {"error": "Failed to register repo"}, status_code=500
+                )
+            labels_created = False
+            try:
+                from prep import ensure_labels  # noqa: PLC0415
+
+                await ensure_labels(repo_cfg)
+                labels_created = True
+            except Exception:  # noqa: BLE001
+                logger.warning("Label creation failed for %s", slug, exc_info=True)
+            return JSONResponse(
+                {
+                    "status": "ok",
+                    "slug": record.slug,
+                    "path": record.path,
+                    "already_cloned": already_cloned,
+                    "labels_created": labels_created,
+                }
+            )
+        # Fallback: register via add_repo_by_path logic
+        return JSONResponse(
+            {
+                "status": "ok",
+                "slug": slug.replace("/", "-"),
+                "path": str(clone_target),
+                "already_cloned": already_cloned,
+                "labels_created": False,
+            }
+        )
+
     @router.post("/api/intent")
     async def submit_intent(request: IntentRequest) -> JSONResponse:
         """Create a GitHub issue from a user intent typed in the dashboard."""
@@ -3627,14 +3829,90 @@ def create_router(
             description=request.description,
             screenshot_base64=request.screenshot_base64,
             environment=request.environment,
+            reporter_id=request.reporter_id,
         )
         state.enqueue_report(report)
+
+        # Create a tracked report for the reporter if a reporter_id is provided
+        if request.reporter_id:
+            tracked = TrackedReport(
+                id=report.id,
+                reporter_id=request.reporter_id,
+                description=request.description,
+                status="queued",
+                history=[
+                    ReportHistoryEntry(
+                        action="submitted",
+                        detail="Bug report submitted via dashboard",
+                    )
+                ],
+            )
+            state.add_tracked_report(tracked)
 
         title = f"[Bug Report] {request.description[:100]}"
         response = ReportIssueResponse(
             issue_number=0, title=title, url="", status="queued"
         )
         return JSONResponse(response.model_dump())
+
+    @router.get("/api/reports")
+    async def list_tracked_reports(reporter_id: str = "") -> JSONResponse:
+        """List tracked reports for a given reporter."""
+        if not reporter_id:
+            return JSONResponse([])
+        reports = state.get_tracked_reports(reporter_id)
+        return JSONResponse([r.model_dump() for r in reports])
+
+    @router.patch("/api/reports/{report_id}")
+    async def update_tracked_report(
+        report_id: str, body: TrackedReportUpdate
+    ) -> JSONResponse:
+        """Update a tracked report (confirm fixed, reopen, cancel)."""
+        report = state.get_tracked_report(report_id)
+        if report is None:
+            return JSONResponse({"error": "Report not found"}, status_code=404)
+        if (
+            body.reporter_id
+            and report.reporter_id
+            and body.reporter_id != report.reporter_id
+        ):
+            return JSONResponse({"error": "Forbidden"}, status_code=403)
+        # Validate state-machine transitions
+        valid_actions: dict[str, list[str]] = {
+            "confirm_fixed": ["fixed"],
+            "reopen": ["fixed", "in-progress", "closed"],
+            "cancel": ["queued", "in-progress", "fixed", "reopened"],
+        }
+        if report.status not in valid_actions.get(body.action, []):
+            return JSONResponse(
+                {
+                    "error": f"Action '{body.action}' is not allowed in status '{report.status}'"
+                },
+                status_code=422,
+            )
+        action_map = {
+            "confirm_fixed": ("closed", "Confirmed fixed by reporter"),
+            "reopen": ("reopened", "Reopened by reporter"),
+            "cancel": ("closed", "Cancelled by reporter"),
+        }
+        status, default_detail = action_map[body.action]
+        updated = state.update_tracked_report(
+            report_id,
+            status=status,
+            detail=body.detail or default_detail,
+            action_label=body.action,
+        )
+        if updated is None:
+            return JSONResponse({"error": "Report not found"}, status_code=404)
+        return JSONResponse(updated.model_dump())
+
+    @router.get("/api/reports/{report_id}/history")
+    async def get_report_history(report_id: str) -> JSONResponse:
+        """Get the timeline/history for a tracked report."""
+        report = state.get_tracked_report(report_id)
+        if report is None:
+            return JSONResponse({"error": "Report not found"}, status_code=404)
+        return JSONResponse([entry.model_dump() for entry in report.history])
 
     @router.get("/api/sessions")
     async def get_sessions(

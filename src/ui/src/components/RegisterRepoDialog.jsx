@@ -1,9 +1,44 @@
 import React, { useCallback, useEffect, useState } from 'react'
 import { useHydraFlow } from '../context/HydraFlowContext'
 import { theme } from '../theme'
+import { GitHubRepoPicker } from './GitHubRepoPicker'
+
+/**
+ * Extract an owner/repo slug from a GitHub URL.
+ * Accepts URLs like:
+ *   https://github.com/owner/repo
+ *   https://github.com/owner/repo.git
+ *   http://github.com/owner/repo/tree/main
+ *   github.com/owner/repo
+ * Returns the slug string or null if the input is not a GitHub URL.
+ */
+export function extractSlugFromUrl(input) {
+  if (!input) return null
+  const trimmed = input.trim()
+  // Quick check: must look like a URL with github in it
+  if (!/github/i.test(trimmed)) return null
+  let url
+  try {
+    // Handle bare "github.com/..." without protocol
+    const withProto = /^https?:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`
+    url = new URL(withProto)
+  } catch {
+    return null
+  }
+  const host = url.hostname.toLowerCase().replace(/^www\./, '')
+  if (host !== 'github.com') {
+    return null
+  }
+  const segments = url.pathname.split('/').filter(Boolean)
+  if (segments.length < 2) return null
+  const owner = segments[0]
+  const repo = segments[1].replace(/\.git$/, '')
+  return `${owner}/${repo}`
+}
 
 export function RegisterRepoDialog({ isOpen, onClose }) {
-  const { addRepoBySlug, addRepoByPath } = useHydraFlow()
+  const { addRepoBySlug, addRepoByPath, fetchRepos } = useHydraFlow()
+  const [tab, setTab] = useState('github')
   const [slug, setSlug] = useState('')
   const [path, setPath] = useState('')
   const [error, setError] = useState('')
@@ -15,6 +50,7 @@ export function RegisterRepoDialog({ isOpen, onClose }) {
       setPath('')
       setError('')
       setSubmitting(false)
+      setTab('github')
       return
     }
     const handleKeyDown = (e) => {
@@ -24,22 +60,30 @@ export function RegisterRepoDialog({ isOpen, onClose }) {
     return () => document.removeEventListener('keydown', handleKeyDown)
   }, [isOpen, onClose])
 
-  const handleSubmit = useCallback(async (event) => {
+  const handleManualSubmit = useCallback(async (event) => {
     event.preventDefault()
     if (submitting) return
     const trimmedSlug = slug.trim()
     const trimmedPath = path.trim()
     if (!trimmedSlug && !trimmedPath) {
-      setError('Enter a GitHub slug or repo path')
+      setError('Enter a GitHub URL, slug, or repo path')
       return
     }
     setSubmitting(true)
     setError('')
     let result
-    if (trimmedSlug) {
-      result = await addRepoBySlug(trimmedSlug)
-    } else {
-      result = await addRepoByPath(trimmedPath)
+    try {
+      if (trimmedSlug) {
+        // Try to extract slug from a GitHub URL, otherwise use as-is
+        const resolved = extractSlugFromUrl(trimmedSlug) || trimmedSlug
+        result = await addRepoBySlug(resolved)
+      } else {
+        result = await addRepoByPath(trimmedPath)
+      }
+    } catch (err) {
+      setSubmitting(false)
+      setError(err?.message || 'Registration failed')
+      return
     }
     setSubmitting(false)
     if (!result?.ok) {
@@ -48,6 +92,11 @@ export function RegisterRepoDialog({ isOpen, onClose }) {
     }
     onClose?.()
   }, [slug, path, submitting, addRepoBySlug, addRepoByPath, onClose])
+
+  const handlePickerSelect = useCallback(async () => {
+    if (fetchRepos) await fetchRepos()
+    onClose?.()
+  }, [fetchRepos, onClose])
 
   if (!isOpen) return null
 
@@ -58,47 +107,92 @@ export function RegisterRepoDialog({ isOpen, onClose }) {
           <span style={styles.title}>Register Repo</span>
           <button type="button" style={styles.closeBtn} onClick={onClose} aria-label="Close register repo dialog">×</button>
         </div>
-        <p style={styles.subtitle}>
-          Provide a GitHub slug (owner/repo) to start an existing repo,
-          or point to a local path to register it with the supervisor.
-        </p>
-        <form onSubmit={handleSubmit}>
-          <label style={styles.label} htmlFor="register-slug">GitHub slug</label>
-          <input
-            id="register-slug"
-            type="text"
-            value={slug}
-            onChange={(e) => setSlug(e.target.value)}
-            placeholder="owner/repo"
-            style={styles.input}
-            autoFocus
-          />
-          <div style={styles.orDivider}>or</div>
-          <label style={styles.label} htmlFor="register-path">Filesystem path</label>
-          <input
-            id="register-path"
-            type="text"
-            value={path}
-            onChange={(e) => setPath(e.target.value)}
-            placeholder="/Users/me/projects/repo"
-            style={styles.input}
-          />
-          {error && <div style={styles.error}>{error}</div>}
-          <div style={styles.actions}>
-            <button type="button" onClick={onClose} style={styles.cancelBtn}>Cancel</button>
-            <button
-              type="submit"
-              style={!slug.trim() && !path.trim() ? styles.submitDisabled : styles.submitBtn}
-              disabled={submitting || (!slug.trim() && !path.trim())}
-              data-testid="register-submit"
-            >
-              {submitting ? 'Registering…' : 'Register Repo'}
-            </button>
+
+        <div style={styles.tabBar}>
+          <button
+            type="button"
+            onClick={() => setTab('github')}
+            style={tab === 'github' ? styles.tabActive : styles.tab}
+            data-testid="tab-github"
+          >
+            GitHub
+          </button>
+          <button
+            type="button"
+            onClick={() => setTab('manual')}
+            style={tab === 'manual' ? styles.tabActive : styles.tab}
+            data-testid="tab-manual"
+          >
+            Manual
+          </button>
+        </div>
+
+        {tab === 'github' && (
+          <div style={styles.tabContent}>
+            <p style={styles.subtitle}>
+              Search and select a repo from your GitHub account.
+              It will be cloned automatically.
+            </p>
+            <GitHubRepoPicker onSelect={handlePickerSelect} disabled={submitting} />
           </div>
-        </form>
+        )}
+
+        {tab === 'manual' && (
+          <div style={styles.tabContent}>
+            <p style={styles.subtitle}>
+              Paste a GitHub URL or enter an owner/repo slug,
+              or point to a local path to register it with the supervisor.
+            </p>
+            <form onSubmit={handleManualSubmit}>
+              <label style={styles.label} htmlFor="register-slug">GitHub URL or slug</label>
+              <input
+                id="register-slug"
+                type="text"
+                value={slug}
+                onChange={(e) => setSlug(e.target.value)}
+                placeholder="https://github.com/owner/repo or owner/repo"
+                style={styles.input}
+                autoFocus
+              />
+              <div style={styles.orDivider}>or</div>
+              <label style={styles.label} htmlFor="register-path">Filesystem path</label>
+              <input
+                id="register-path"
+                type="text"
+                value={path}
+                onChange={(e) => setPath(e.target.value)}
+                placeholder="/Users/me/projects/repo"
+                style={styles.input}
+              />
+              {error && <div style={styles.error}>{error}</div>}
+              <div style={styles.actions}>
+                <button type="button" onClick={onClose} style={styles.cancelBtn}>Cancel</button>
+                <button
+                  type="submit"
+                  style={!slug.trim() && !path.trim() ? styles.submitDisabled : styles.submitBtn}
+                  disabled={submitting || (!slug.trim() && !path.trim())}
+                  data-testid="register-submit"
+                >
+                  {submitting ? 'Registering…' : 'Register Repo'}
+                </button>
+              </div>
+            </form>
+          </div>
+        )}
       </div>
     </div>
   )
+}
+
+const _tabBase = {
+  flex: 1,
+  padding: '8px 12px',
+  border: 'none',
+  background: 'transparent',
+  fontSize: 12,
+  fontWeight: 600,
+  cursor: 'pointer',
+  transition: 'color 0.15s, border-color 0.15s',
 }
 
 const styles = {
@@ -112,7 +206,7 @@ const styles = {
     zIndex: 1000,
   },
   card: {
-    width: 420,
+    width: 480,
     background: theme.surface,
     borderRadius: 12,
     border: `1px solid ${theme.border}`,
@@ -136,6 +230,17 @@ const styles = {
     fontSize: 20,
     color: theme.textMuted,
     cursor: 'pointer',
+  },
+  tabBar: {
+    display: 'flex',
+    gap: 0,
+    marginBottom: 12,
+    borderBottom: `1px solid ${theme.border}`,
+  },
+  tab: { ..._tabBase, borderBottom: '2px solid transparent', color: theme.textMuted },
+  tabActive: { ..._tabBase, borderBottom: `2px solid ${theme.accent}`, color: theme.accent },
+  tabContent: {
+    minHeight: 200,
   },
   subtitle: {
     fontSize: 12,
