@@ -87,7 +87,8 @@ jobs:
               "pyproject.toml", "requirements.txt", "setup.py",
               "package.json", "go.mod", "Cargo.toml", "pom.xml",
               "build.gradle", "build.gradle.kts", "Gemfile",
-              "CMakeLists.txt"
+              "CMakeLists.txt",
+              "Package.swift"
           }
 
           paths = set()
@@ -114,6 +115,8 @@ jobs:
                   path.name in markers
                   or path.name.endswith(".sln")
                   or path.name.endswith(".csproj")
+                  or path.name.endswith(".xcodeproj")
+                  or path.name.endswith(".xcworkspace")
               ):
                   rel = path.parent.relative_to(root)
                   paths.add(str(rel) if str(rel) else ".")
@@ -206,6 +209,45 @@ _UNIVERSAL_WORKFLOW = _UNIVERSAL_WORKFLOW_TEMPLATE.replace(
     "__PREP_IGNORED_DIRS__", _IGNORED_DIRS_LITERAL
 )
 
+_SWIFT_WORKFLOW_TEMPLATE = """\
+name: Quality
+# prep-managed: quality-workflow
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+jobs:
+  quality:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Select Xcode
+        run: sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
+      - name: Quality Lite
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -f Makefile ] || [ -f makefile ] || [ -f GNUmakefile ]; then
+            make quality-lite
+            exit 0
+          fi
+          echo "Missing Makefile. Run 'make prep' to scaffold make targets." >&2
+          exit 1
+      - name: Quality Full
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -f Makefile ] || [ -f makefile ] || [ -f GNUmakefile ]; then
+            make quality
+            exit 0
+          fi
+          echo "Missing Makefile. Run 'make prep' to scaffold make targets." >&2
+          exit 1
+"""
+
 _WORKFLOW_TEMPLATES: dict[str, str] = {
     "python": _UNIVERSAL_WORKFLOW,
     "javascript": _UNIVERSAL_WORKFLOW,
@@ -218,6 +260,7 @@ _WORKFLOW_TEMPLATES: dict[str, str] = {
     "go": _UNIVERSAL_WORKFLOW,
     "rust": _UNIVERSAL_WORKFLOW,
     "cpp": _UNIVERSAL_WORKFLOW,
+    "swift": _SWIFT_WORKFLOW_TEMPLATE,
     "unknown": _UNIVERSAL_WORKFLOW,
 }
 

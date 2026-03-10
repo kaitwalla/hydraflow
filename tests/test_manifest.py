@@ -75,6 +75,14 @@ class TestDetectLanguages:
         (tmp_path / "tsconfig.json").write_text("{}")
         assert detect_languages(tmp_path) == ["javascript"]
 
+    def test_detect_languages__swift_package(self, tmp_path: Path) -> None:
+        (tmp_path / "Package.swift").write_text("// swift-tools-version:5.9")
+        assert detect_languages(tmp_path) == ["swift"]
+
+    def test_detect_languages__xcode_project(self, tmp_path: Path) -> None:
+        (tmp_path / "App.xcodeproj").mkdir()
+        assert detect_languages(tmp_path) == ["swift"]
+
 
 # ---------------------------------------------------------------------------
 # detect_language (singular — canonical shared utility)
@@ -147,6 +155,16 @@ class TestDetectBuildSystems:
         assert "make" in result
         assert "pip" in result
 
+    def test_detect_build_systems__spm(self, tmp_path: Path) -> None:
+        (tmp_path / "Package.swift").write_text("// swift-tools-version:5.9")
+        result = detect_build_systems(tmp_path)
+        assert "spm" in result
+        assert "xcodebuild" in result
+
+    def test_detect_build_systems__xcode_project(self, tmp_path: Path) -> None:
+        (tmp_path / "App.xcodeproj").mkdir()
+        assert "xcodebuild" in detect_build_systems(tmp_path)
+
 
 # ---------------------------------------------------------------------------
 # detect_test_frameworks
@@ -194,6 +212,14 @@ class TestDetectTestFrameworks:
     def test_detect_test_frameworks__go_test(self, tmp_path: Path) -> None:
         (tmp_path / "go.mod").write_text("module example")
         assert "go-test" in detect_test_frameworks(tmp_path)
+
+    def test_detect_test_frameworks__xctest_via_spm(self, tmp_path: Path) -> None:
+        (tmp_path / "Package.swift").write_text("// swift-tools-version:5.9")
+        assert "xctest" in detect_test_frameworks(tmp_path)
+
+    def test_detect_test_frameworks__xctest_via_xcodeproj(self, tmp_path: Path) -> None:
+        (tmp_path / "App.xcodeproj").mkdir()
+        assert "xctest" in detect_test_frameworks(tmp_path)
 
     def test_detect_test_frameworks__empty_repo(self, tmp_path: Path) -> None:
         assert detect_test_frameworks(tmp_path) == []

@@ -319,6 +319,23 @@ class TestScaffoldMakefile:
         content = (tmp_path / "Makefile").read_text()
         assert "cargo test --all-targets" in content
 
+    def test_creates_new_makefile_for_swift_spm_repo(self, tmp_path: Path) -> None:
+        (tmp_path / "Package.swift").write_text("// swift-tools-version:5.9")
+        result = scaffold_makefile(tmp_path)
+        assert result.created is True
+        assert result.language == "swift"
+        content = (tmp_path / "Makefile").read_text()
+        assert "swift test" in content
+        assert "swiftlint" in content
+
+    def test_creates_new_makefile_for_swift_xcode_repo(self, tmp_path: Path) -> None:
+        (tmp_path / "App.xcodeproj").mkdir()
+        result = scaffold_makefile(tmp_path)
+        assert result.created is True
+        assert result.language == "swift"
+        content = (tmp_path / "Makefile").read_text()
+        assert "xcodebuild" in content
+
     def test_merges_into_existing_makefile(self, tmp_path: Path) -> None:
         (tmp_path / "pyproject.toml").touch()
         makefile = tmp_path / "Makefile"

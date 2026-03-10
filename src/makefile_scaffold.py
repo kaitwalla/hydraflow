@@ -2,7 +2,7 @@
 
 Generates or merges Makefile targets (help, lint, lint-check, lint-fix,
 typecheck, security, test, quality-lite, quality) based on detected prep
-stack (Python, Node, Java, Ruby/Rails, C#, Go, Rust, C++).
+stack (Python, Node, Java, Ruby/Rails, C#, Go, Rust, C++, Swift).
 """
 
 from __future__ import annotations
@@ -105,6 +105,23 @@ _RUST_TARGETS: dict[str, str] = {
     "typecheck": "\tcargo check --all-targets\n",
     "security": "\tcargo audit || true\n",
     "test": "\tcargo test --all-targets\n",
+}
+
+_SWIFT_TARGETS: dict[str, str] = {
+    "lint": "\tswiftlint --fix || true\n",
+    "lint-check": "\tswiftlint lint --strict || true\n",
+    "lint-fix": "\t$(MAKE) lint\n",
+    "typecheck": (
+        "\tif [ -f Package.swift ]; then swift build; "
+        "elif ls *.xcodeproj 1>/dev/null 2>&1; then xcodebuild build -scheme \"$$(xcodebuild -list -json 2>/dev/null | python3 -c 'import sys,json; print(json.load(sys.stdin)[\"project\"][\"schemes\"][0])' 2>/dev/null || echo default)\" CODE_SIGNING_ALLOWED=NO | xcpretty || true; "
+        'else echo "No Swift project found" >&2; exit 1; fi\n'
+    ),
+    "security": "\t@echo \"No Swift security scanner configured\" >&2 || true\n",
+    "test": (
+        "\tif [ -f Package.swift ]; then swift test; "
+        "elif ls *.xcodeproj 1>/dev/null 2>&1; then xcodebuild test -scheme \"$$(xcodebuild -list -json 2>/dev/null | python3 -c 'import sys,json; print(json.load(sys.stdin)[\"project\"][\"schemes\"][0])' 2>/dev/null || echo default)\" CODE_SIGNING_ALLOWED=NO -destination 'platform=macOS' | xcpretty || true; "
+        'else echo "No Swift project found" >&2; exit 1; fi\n'
+    ),
 }
 
 _CPP_TARGETS: dict[str, str] = {
@@ -263,6 +280,7 @@ _PROJECT_MARKERS: tuple[str, ...] = (
     "build.gradle.kts",
     "Gemfile",
     "CMakeLists.txt",
+    "Package.swift",
 )
 
 
@@ -277,6 +295,11 @@ def discover_project_paths(repo_root: Path) -> list[Path]:
         if any(
             root == resolved or root in resolved.parents for root in submodule_roots
         ):
+            continue
+        if path.is_dir() and path.name.endswith(
+            (".xcodeproj", ".xcworkspace")
+        ):
+            paths.add(path.parent)
             continue
         if not path.is_file():
             continue
@@ -354,6 +377,7 @@ def _targets_for_language(language: str) -> dict[str, str]:
         "go": _GO_TARGETS,
         "rust": _RUST_TARGETS,
         "cpp": _CPP_TARGETS,
+        "swift": _SWIFT_TARGETS,
     }
     base = templates.get(language)
     if not base:

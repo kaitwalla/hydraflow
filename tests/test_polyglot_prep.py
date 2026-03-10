@@ -21,6 +21,7 @@ from polyglot_prep import detect_prep_stack, scaffold_tests_polyglot
         (["Gemfile", "config/application.rb"], "rails"),
         (["Gemfile"], "ruby"),
         (["pyproject.toml"], "python"),
+        (["Package.swift"], "swift"),
     ],
 )
 def test_detect_prep_stack(files: list[str], expected: str, tmp_path: Path) -> None:
@@ -41,6 +42,7 @@ def test_detect_prep_stack(files: list[str], expected: str, tmp_path: Path) -> N
         ("Cargo.toml", "tests/prep_smoke*.rs"),
         ("CMakeLists.txt", "tests/prep_smoke*.cpp"),
         ("Gemfile", "test/prep_smoke_test*.rb"),
+        ("Package.swift", "Tests/PrepSmokeTests*.swift"),
     ],
 )
 def test_scaffold_tests_polyglot_for_extra_stacks(
@@ -166,6 +168,40 @@ def test_scaffold_rust_batches_across_runs(tmp_path: Path) -> None:
     assert len(second_tests) == 2
     assert "pending before batch 14" in first.progress
     assert "pending before batch 2" in second.progress
+
+
+def test_detect_prep_stack_xcodeproj(tmp_path: Path) -> None:
+    (tmp_path / "App.xcodeproj").mkdir()
+    assert detect_prep_stack(tmp_path) == "swift"
+
+
+def test_scaffold_swift_creates_xctest_smoke_suite(tmp_path: Path) -> None:
+    (tmp_path / "Package.swift").write_text("// swift-tools-version:5.9\n")
+
+    result = scaffold_tests_polyglot(tmp_path)
+
+    assert result.skipped is False
+    assert result.language == "swift"
+    smoke_files = sorted((tmp_path / "Tests").glob("PrepSmokeTests*.swift"))
+    assert len(smoke_files) == 8
+    # Verify the smoke test content is valid XCTest
+    content = smoke_files[0].read_text()
+    assert "import XCTest" in content
+    assert "XCTestCase" in content
+    assert "XCTAssertTrue" in content
+
+
+def test_scaffold_swift_skips_when_tests_exist(tmp_path: Path) -> None:
+    (tmp_path / "Package.swift").write_text("// swift-tools-version:5.9\n")
+    tests_dir = tmp_path / "Tests"
+    tests_dir.mkdir()
+    for idx in range(1, 9):
+        name = "PrepSmokeTests.swift" if idx == 1 else f"PrepSmokeTests_{idx}.swift"
+        (tests_dir / name).write_text("import XCTest\n")
+
+    result = scaffold_tests_polyglot(tmp_path)
+    assert result.skipped is True
+    assert "already exists" in result.skip_reason
 
 
 def test_node_ui_framework_repo_is_handled_generically(tmp_path: Path) -> None:

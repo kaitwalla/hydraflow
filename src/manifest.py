@@ -56,6 +56,12 @@ GO_MARKERS: tuple[str, ...] = ("go.mod",)
 JAVA_MARKERS: tuple[str, ...] = ("pom.xml", "build.gradle", "build.gradle.kts")
 """File markers indicating a Java/Kotlin project."""
 
+SWIFT_MARKERS: tuple[str, ...] = ("Package.swift",)
+"""File markers indicating a Swift/iOS project (Swift Package Manager)."""
+
+XCODE_PROJECT_GLOBS: tuple[str, ...] = ("*.xcodeproj", "*.xcworkspace")
+"""Glob patterns indicating an Xcode project (not simple file markers)."""
+
 BUILD_SYSTEM_MARKERS: dict[str, tuple[str, ...]] = {
     "make": ("Makefile", "GNUmakefile", "makefile"),
     "cmake": ("CMakeLists.txt",),
@@ -64,6 +70,8 @@ BUILD_SYSTEM_MARKERS: dict[str, tuple[str, ...]] = {
     "cargo": ("Cargo.toml",),
     "npm": ("package.json",),
     "pip": ("pyproject.toml", "setup.py"),
+    "spm": ("Package.swift",),
+    "xcodebuild": (),  # detected via glob, not simple markers
 }
 """Build system name -> marker files mapping."""
 
@@ -73,6 +81,7 @@ TEST_FRAMEWORK_MARKERS: dict[str, tuple[str, ...]] = {
     "jest": ("jest.config.js", "jest.config.ts", "jest.config.mjs"),
     "cargo-test": ("Cargo.toml",),
     "go-test": ("go.mod",),
+    "xctest": ("Package.swift",),  # also detected via .xcodeproj glob
 }
 """Test framework -> marker files mapping."""
 
@@ -88,6 +97,15 @@ CI_MARKERS: dict[str, str] = {
 # ---------------------------------------------------------------------------
 # Detection helpers
 # ---------------------------------------------------------------------------
+
+
+def _has_swift_project(repo_root: Path) -> bool:
+    """Return True if the repo contains Swift package or Xcode project markers."""
+    if any((repo_root / m).exists() for m in SWIFT_MARKERS):
+        return True
+    return any(
+        bool(list(repo_root.glob(pattern))) for pattern in XCODE_PROJECT_GLOBS
+    )
 
 
 def detect_languages(repo_root: Path) -> list[str]:
@@ -106,6 +124,8 @@ def detect_languages(repo_root: Path) -> list[str]:
         languages.append("go")
     if any((repo_root / m).exists() for m in JAVA_MARKERS):
         languages.append("java")
+    if _has_swift_project(repo_root):
+        languages.append("swift")
     return languages
 
 
@@ -130,8 +150,10 @@ def detect_build_systems(repo_root: Path) -> list[str]:
     """Detect build systems present in the repository."""
     systems: list[str] = []
     for name, markers in BUILD_SYSTEM_MARKERS.items():
-        if any((repo_root / m).exists() for m in markers):
+        if markers and any((repo_root / m).exists() for m in markers):
             systems.append(name)
+    if _has_swift_project(repo_root):
+        systems.append("xcodebuild")
     return systems
 
 
@@ -202,6 +224,10 @@ def detect_test_frameworks(repo_root: Path) -> list[str]:
     # --- go test ---
     if (repo_root / "go.mod").exists():
         frameworks.append("go-test")
+
+    # --- xctest ---
+    if _has_swift_project(repo_root):
+        frameworks.append("xctest")
 
     return frameworks
 

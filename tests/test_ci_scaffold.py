@@ -78,6 +78,14 @@ class TestGenerateWorkflow:
         assert "make smoke" in wf
         assert "|| true" not in wf
 
+    def test_swift_workflow_uses_macos_runner(self) -> None:
+        wf = generate_workflow("swift")
+        assert "macos-latest" in wf
+        assert "prep-managed: quality-workflow" in wf
+        assert "make quality-lite" in wf
+        assert "make quality" in wf
+        assert "xcode-select" in wf
+
     def test_unknown_workflow_fallback(self) -> None:
         wf = generate_workflow("some-new-lang")
         assert "make quality-lite" in wf
@@ -135,6 +143,27 @@ class TestScaffoldCI:
         assert "make quality-lite" in content
         assert "make quality" in content
         assert "make smoke" in content
+
+    def test_creates_workflow_for_swift_spm_repo(self, tmp_path: Path) -> None:
+        (tmp_path / "Package.swift").write_text("// swift-tools-version:5.9")
+
+        result = scaffold_ci(tmp_path)
+
+        assert result.created is True
+        assert result.language == "swift"
+        content = (tmp_path / ".github" / "workflows" / "quality.yml").read_text()
+        assert "macos-latest" in content
+        assert "xcode-select" in content
+
+    def test_creates_workflow_for_swift_xcode_repo(self, tmp_path: Path) -> None:
+        (tmp_path / "App.xcodeproj").mkdir()
+
+        result = scaffold_ci(tmp_path)
+
+        assert result.created is True
+        assert result.language == "swift"
+        content = (tmp_path / ".github" / "workflows" / "quality.yml").read_text()
+        assert "macos-latest" in content
 
     def test_skips_when_quality_workflow_exists(self, tmp_path: Path) -> None:
         wf_dir = tmp_path / ".github" / "workflows"

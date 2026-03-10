@@ -6,7 +6,12 @@ import re
 from collections.abc import Callable
 from pathlib import Path
 
-from manifest import detect_language, detect_languages
+from manifest import (
+    SWIFT_MARKERS,
+    XCODE_PROJECT_GLOBS,
+    detect_language,
+    detect_languages,
+)
 from test_scaffold import TestScaffoldResult, scaffold_tests
 
 _IGNORED_DIR_NAMES = {
@@ -81,6 +86,17 @@ def _ruby_smoke_content(class_name: str, *, rails: bool) -> str:
     )
 
 
+def _swift_smoke_content(func_name: str) -> str:
+    return (
+        "import XCTest\n\n"
+        f"final class {func_name}: XCTestCase {{\n"
+        "    func testSmoke() {\n"
+        "        XCTAssertTrue(true)\n"
+        "    }\n"
+        "}\n"
+    )
+
+
 def _is_ignored_rel_path(path: Path) -> bool:
     return any(part in _IGNORED_DIR_NAMES for part in path.parts)
 
@@ -141,8 +157,15 @@ def detect_prep_stack(repo_root: Path) -> str:
     langs = set(detect_languages(repo_root))
     primary = detect_language(repo_root)
 
+    has_xcode_project = any(
+        bool(list(repo_root.glob(p))) for p in XCODE_PROJECT_GLOBS
+    )
+    has_spm = any((repo_root / m).exists() for m in SWIFT_MARKERS)
+
     if any(repo_root.glob("*.sln")) or any(repo_root.glob("*.csproj")):
         stack = "csharp"
+    elif has_xcode_project or has_spm:
+        stack = "swift"
     elif is_rails:
         stack = "rails"
     elif has_gemfile:
@@ -475,6 +498,30 @@ def _scaffold_cpp_tests(repo_root: Path, dry_run: bool) -> TestScaffoldResult:
     return result
 
 
+def _scaffold_swift_tests(repo_root: Path, dry_run: bool) -> TestScaffoldResult:
+    result = TestScaffoldResult(language="swift")
+    tests_dir = repo_root / "Tests"
+    if not tests_dir.is_dir():
+        result.created_dirs.append("Tests")
+        if not dry_run:
+            tests_dir.mkdir(parents=True, exist_ok=True)
+    for idx, file_name in enumerate(
+        _smoke_file_names("PrepSmokeTests", ".swift", _SMOKE_TEST_TARGET),
+        start=1,
+    ):
+        smoke = tests_dir / file_name
+        class_name = "PrepSmokeTests" if idx == 1 else f"PrepSmokeTests{idx}"
+        if smoke.is_file():
+            continue
+        result.created_files.append(f"Tests/{file_name}")
+        if not dry_run:
+            smoke.write_text(_swift_smoke_content(class_name), encoding="utf-8")
+    if not result.created_dirs and not result.created_files:
+        result.skipped = True
+        result.skip_reason = "Swift test infrastructure already exists"
+    return result
+
+
 def scaffold_tests_polyglot(
     repo_root: Path, *, dry_run: bool = False
 ) -> TestScaffoldResult:
@@ -494,6 +541,7 @@ def scaffold_tests_polyglot(
         "go": lambda: _scaffold_go_tests(repo_root, dry_run),
         "rust": lambda: _scaffold_rust_tests(repo_root, dry_run),
         "cpp": lambda: _scaffold_cpp_tests(repo_root, dry_run),
+        "swift": lambda: _scaffold_swift_tests(repo_root, dry_run),
     }
     if stack in handlers:
         return handlers[stack]()
